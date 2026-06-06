@@ -1,0 +1,9 @@
+# Token cache & khóa mã hóa (TUYỆT ĐỐI không commit)
+storage/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env

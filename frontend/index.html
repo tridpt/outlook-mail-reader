@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>📬 Hộp thư Outlook đa tài khoản</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>📬 Hộp thư Outlook đa tài khoản</h1>
+    <p class="subtitle">Đăng nhập 1 lần mỗi tài khoản, sau đó xem gộp mail mà không phải đăng nhập lại.</p>
+
+    <div id="not-configured" class="card warn" style="display:none;">
+      <h2>⚙️ Chưa cấu hình</h2>
+      <p class="hint">Chưa có <code>OUTLOOK_CLIENT_ID</code>. Hãy đăng ký một Azure App (public client) rồi
+        đặt biến môi trường <code>OUTLOOK_CLIENT_ID</code> trước khi chạy server. Xem hướng dẫn trong
+        <code>README.md</code>.</p>
+    </div>
+
+    <div class="card">
+      <div class="row between">
+        <h2 style="margin:0;">Tài khoản đã thêm</h2>
+        <button class="btn primary" id="btn-add">+ Thêm tài khoản</button>
+      </div>
+      <div id="accounts" style="margin-top:14px;"></div>
+      <div id="login-area" style="display:none; margin-top:14px;">
+        <p class="hint">Mở liên kết dưới đây và nhập mã để đăng nhập (chỉ làm 1 lần cho mỗi tài khoản):</p>
+        <div><a id="login-link" href="#" target="_blank" rel="noopener">Mở trang đăng nhập Microsoft ↗</a></div>
+        <div class="code-box" id="login-code">--------</div>
+        <p class="hint" id="login-status">Đang chờ bạn hoàn tất đăng nhập…</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row between" style="flex-wrap:wrap; gap:10px;">
+        <h2 style="margin:0;">Hộp thư gộp</h2>
+        <div class="row" style="gap:8px;">
+          <label class="row small" style="gap:6px; cursor:pointer;">
+            <input type="checkbox" id="chk-unread" /> Chỉ chưa đọc
+          </label>
+          <button class="btn" id="btn-refresh">🔄 Tải mail</button>
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px; gap:8px;">
+        <input type="text" id="search-input" placeholder="🔎 Tìm mail trên tất cả tài khoản…"
+          style="flex:1; padding:10px 12px; background:#10131c; color:var(--text);
+          border:1px solid var(--border); border-radius:10px;" />
+        <button class="btn" id="btn-search">Tìm</button>
+        <button class="btn" id="btn-clear" style="display:none;">✕</button>
+      </div>
+      <div id="inbox" style="margin-top:14px;">
+        <p class="hint">Thêm tài khoản rồi bấm "Tải mail" để xem.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cửa sổ xem chi tiết mail -->
+  <div id="modal" class="modal" style="display:none;">
+    <div class="modal-box">
+      <div class="row between">
+        <h2 id="m-subject" style="margin:0;">…</h2>
+        <button class="btn" id="m-close">✕</button>
+      </div>
+      <p class="mail-meta" id="m-meta"></p>
+      <div class="row" style="gap:8px; margin:6px 0 12px;">
+        <button class="btn small" id="m-toggle-read">Đánh dấu chưa đọc</button>
+        <a class="btn small" id="m-weblink" href="#" target="_blank" rel="noopener">Mở trên Outlook ↗</a>
+      </div>
+      <iframe id="m-body" class="mail-body-frame" sandbox></iframe>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

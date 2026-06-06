@@ -1,0 +1,12 @@
+# Web framework
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+
+# Đăng nhập OAuth + tự refresh token (không lưu mật khẩu)
+msal>=1.31.0
+
+# Gọi Microsoft Graph API
+requests>=2.32.0
+
+# Mã hóa token cache khi lưu xuống đĩa
+cryptography>=43.0.0

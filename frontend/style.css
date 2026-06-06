@@ -1,0 +1,103 @@
+:root {
+  --bg: #0f1117;
+  --card: #1a1d29;
+  --accent: #6c8cff;
+  --accent-2: #4caf7d;
+  --text: #e6e8ee;
+  --muted: #9aa0b4;
+  --border: #2a2e3d;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.container { max-width: 760px; margin: 0 auto; padding: 32px 20px 80px; }
+
+h1 { font-size: 1.6rem; margin-bottom: 4px; }
+h2 { font-size: 1.05rem; margin: 0 0 12px; }
+.subtitle { color: var(--muted); margin-top: 0; }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px;
+  margin-bottom: 18px;
+}
+.card.warn { border-color: #6a5a2a; background: #251f13; }
+
+.row { display: flex; align-items: center; gap: 12px; }
+.row.between { justify-content: space-between; }
+.hint { color: var(--muted); font-size: 0.85rem; margin: 8px 0 0; }
+
+.btn {
+  background: #262a3a;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 18px;
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+.btn:hover { border-color: var(--accent); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+
+code {
+  background: #10131c;
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-size: .85em;
+}
+
+.acct-chip {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; background: #262a3a;
+  border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px;
+}
+.acct-chip .email { flex: 1; font-size: .9rem; }
+
+.mail-item {
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 14px; margin-bottom: 10px; background: #171a25;
+}
+.mail-item.unread { border-left: 3px solid var(--accent); }
+.mail-subject { font-weight: 600; margin: 0 0 4px; }
+.mail-meta { color: var(--muted); font-size: .8rem; margin: 0 0 6px; }
+.mail-preview { color: var(--muted); font-size: .88rem; margin: 0; }
+
+.code-box {
+  font-size: 1.6rem; letter-spacing: 3px; font-weight: 700; color: var(--accent);
+  background: #10131c; padding: 12px 18px; border-radius: 10px;
+  display: inline-block; margin: 8px 0;
+}
+.group-head { margin: 18px 0 10px; color: var(--accent-2); font-weight: 600; }
+.small { font-size: .8rem; }
+.danger { color: #ff7a7a; cursor: pointer; background: none; border: none; }
+
+/* ----- Mail item clickable ----- */
+.mail-item { cursor: pointer; }
+.mail-item:hover { border-color: var(--accent); }
+
+/* ----- Modal xem chi tiết mail ----- */
+.modal {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, .6);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px; z-index: 100;
+}
+.modal-box {
+  background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+  padding: 20px; width: 100%; max-width: 720px; max-height: 88vh;
+  display: flex; flex-direction: column;
+}
+.mail-body-frame {
+  flex: 1; min-height: 320px; width: 100%; border: 1px solid var(--border);
+  border-radius: 10px; background: #fff;
+}
