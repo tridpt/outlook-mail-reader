@@ -149,21 +149,108 @@ class OutlookEngine:
             )
         return result["access_token"]
 
+    # ---------- Thư mục ----------
+    def list_folders(self, home_account_id: str) -> list[dict[str, Any]]:
+        """Danh sách thư mục mail + số mail chưa đọc của mỗi thư mục."""
+        token = self._token_for(home_account_id)
+        url = (
+            f"{GRAPH_BASE}/me/mailFolders"
+            "?$top=50&$select=id,displayName,unreadItemCount,totalItemCount"
+        )
+        resp = requests.get(
+            url, headers={"Authorization": f"Bearer {token}"}, timeout=30
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(f"Graph trả lỗi {resp.status_code}: {resp.text[:200]}")
+        return [
+            {
+                "id": f.get("id", ""),
+                "name": f.get("displayName", ""),
+                "unread": f.get("unreadItemCount", 0),
+                "total": f.get("totalItemCount", 0),
+            }
+            for f in resp.json().get("value", [])
+        ]
+
+    def inbox_unread_count(self, home_account_id: str) -> int:
+        """Số mail chưa đọc trong Inbox của 1 tài khoản (cho badge)."""
+        token = self._token_for(home_account_id)
+        resp = requests.get(
+            f"{GRAPH_BASE}/me/mailFolders/inbox?$select=unreadItemCount",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(f"Graph trả lỗi {resp.status_code}: {resp.text[:200]}")
+        return resp.json().get("unreadItemCount", 0)
+
+    def account_unread_counts(self) -> list[dict[str, Any]]:
+        """Số mail chưa đọc của Inbox cho từng tài khoản."""
+        out = []
+        for acc in self.list_accounts():
+            entry: dict[str, Any] = {"home_account_id": acc["home_account_id"]}
+            try:
+                entry["unread"] = self.inbox_unread_count(acc["home_account_id"])
+            except Exception:  # noqa: BLE001
+                entry["unread"] = None
+            out.append(entry)
+        return out
+
     # ---------- Đọc mail ----------
+    @staticmethod
+    def _build_filter(
+        unread_only: bool,
+        has_attachments: bool,
+        date_from: str | None,
+        date_to: str | None,
+    ) -> str:
+        """Ghép biểu thức $filter của Graph từ các tiêu chí."""
+        parts: list[str] = []
+        if unread_only:
+            parts.append("isRead eq false")
+        if has_attachments:
+            parts.append("hasAttachments eq true")
+        if date_from:
+            parts.append(f"receivedDateTime ge {date_from}T00:00:00Z")
+        if date_to:
+            parts.append(f"receivedDateTime le {date_to}T23:59:59Z")
+        return " and ".join(parts)
+
     def get_messages(
         self,
         home_account_id: str,
         count: int = DEFAULT_MAIL_COUNT,
+        skip: int = 0,
+        folder: str | None = None,
         unread_only: bool = False,
-    ) -> list[dict[str, Any]]:
+        has_attachments: bool = False,
+        sender: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> dict[str, Any]:
+        """Lấy mail (có phân trang, theo thư mục, có lọc).
+
+        Trả về {"messages": [...], "has_more": bool}.
+        Lọc theo người gửi (`sender`) làm phía client trên trang đã tải vì
+        Graph $filter không hỗ trợ tìm gần đúng địa chỉ người gửi.
+        """
         token = self._token_for(home_account_id)
-        url = (
-            f"{GRAPH_BASE}/me/messages"
-            f"?$top={count}&$orderby=receivedDateTime desc"
-            "&$select=id,subject,from,receivedDateTime,bodyPreview,isRead,webLink"
+        base = (
+            f"{GRAPH_BASE}/me/mailFolders/{folder}/messages"
+            if folder
+            else f"{GRAPH_BASE}/me/messages"
         )
-        if unread_only:
-            url += "&$filter=isRead eq false"
+        url = (
+            f"{base}?$top={count}&$skip={skip}&$orderby=receivedDateTime desc"
+            "&$select=id,subject,from,receivedDateTime,bodyPreview,isRead,"
+            "hasAttachments,webLink"
+        )
+        flt = self._build_filter(unread_only, has_attachments, date_from, date_to)
+        if flt:
+            from urllib.parse import quote
+
+            url += f"&$filter={quote(flt)}"
+
         resp = requests.get(
             url, headers={"Authorization": f"Bearer {token}"}, timeout=30
         )
@@ -171,23 +258,36 @@ class OutlookEngine:
             raise RuntimeError(
                 f"Graph trả lỗi {resp.status_code}: {resp.text[:200]}"
             )
+        data = resp.json()
 
         messages = []
-        for m in resp.json().get("value", []):
-            sender = (m.get("from") or {}).get("emailAddress", {})
+        for m in data.get("value", []):
+            s = (m.get("from") or {}).get("emailAddress", {})
             messages.append(
                 {
                     "id": m.get("id", ""),
                     "subject": m.get("subject", "(không tiêu đề)"),
-                    "from_name": sender.get("name", ""),
-                    "from_address": sender.get("address", ""),
+                    "from_name": s.get("name", ""),
+                    "from_address": s.get("address", ""),
                     "received": m.get("receivedDateTime", ""),
                     "preview": m.get("bodyPreview", ""),
                     "is_read": m.get("isRead", False),
+                    "has_attachments": m.get("hasAttachments", False),
                     "web_link": m.get("webLink", ""),
                 }
             )
-        return messages
+
+        has_more = bool(data.get("@odata.nextLink"))
+
+        if sender:
+            q = sender.lower()
+            messages = [
+                m
+                for m in messages
+                if q in m["from_name"].lower() or q in m["from_address"].lower()
+            ]
+
+        return {"messages": messages, "has_more": has_more}
 
     def get_message_detail(
         self, home_account_id: str, message_id: str
@@ -197,7 +297,7 @@ class OutlookEngine:
         url = (
             f"{GRAPH_BASE}/me/messages/{message_id}"
             "?$select=id,subject,from,toRecipients,ccRecipients,"
-            "receivedDateTime,body,isRead,webLink"
+            "receivedDateTime,body,isRead,hasAttachments,webLink"
         )
         resp = requests.get(
             url, headers={"Authorization": f"Bearer {token}"}, timeout=30
@@ -228,7 +328,61 @@ class OutlookEngine:
             "body_type": body.get("contentType", "text"),
             "body": body.get("content", ""),
             "is_read": m.get("isRead", False),
+            "has_attachments": m.get("hasAttachments", False),
             "web_link": m.get("webLink", ""),
+        }
+
+    # ---------- Đính kèm ----------
+    def list_attachments(
+        self, home_account_id: str, message_id: str
+    ) -> list[dict[str, Any]]:
+        """Danh sách file đính kèm của 1 mail (không tải nội dung)."""
+        token = self._token_for(home_account_id)
+        url = (
+            f"{GRAPH_BASE}/me/messages/{message_id}/attachments"
+            "?$select=id,name,contentType,size,isInline"
+        )
+        resp = requests.get(
+            url, headers={"Authorization": f"Bearer {token}"}, timeout=30
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(f"Graph trả lỗi {resp.status_code}: {resp.text[:200]}")
+        out = []
+        for a in resp.json().get("value", []):
+            out.append(
+                {
+                    "id": a.get("id", ""),
+                    "name": a.get("name", "attachment"),
+                    "content_type": a.get("contentType", "application/octet-stream"),
+                    "size": a.get("size", 0),
+                    "is_inline": a.get("isInline", False),
+                }
+            )
+        return out
+
+    def get_attachment(
+        self, home_account_id: str, message_id: str, attachment_id: str
+    ) -> dict[str, Any]:
+        """Tải nội dung 1 file đính kèm. Trả về {name, content_type, bytes}."""
+        import base64
+
+        token = self._token_for(home_account_id)
+        url = f"{GRAPH_BASE}/me/messages/{message_id}/attachments/{attachment_id}"
+        resp = requests.get(
+            url, headers={"Authorization": f"Bearer {token}"}, timeout=60
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(f"Graph trả lỗi {resp.status_code}: {resp.text[:200]}")
+        a = resp.json()
+        content_b64 = a.get("contentBytes")
+        if content_b64 is None:
+            raise RuntimeError(
+                "Đính kèm này không phải file tải được (có thể là mail nhúng)."
+            )
+        return {
+            "name": a.get("name", "attachment"),
+            "content_type": a.get("contentType", "application/octet-stream"),
+            "bytes": base64.b64decode(content_b64),
         }
 
     def mark_read(
@@ -313,19 +467,42 @@ class OutlookEngine:
         return out
 
     def get_unified_inbox(
-        self, count: int = DEFAULT_MAIL_COUNT, unread_only: bool = False
+        self,
+        count: int = DEFAULT_MAIL_COUNT,
+        skip: int = 0,
+        folder: str | None = None,
+        unread_only: bool = False,
+        has_attachments: bool = False,
+        sender: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        only_account: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Gộp mail mới nhất của tất cả tài khoản đã đăng nhập."""
+        """Gộp mail của các tài khoản đã đăng nhập (có thể lọc 1 tài khoản)."""
         result = []
-        for acc in self.list_accounts():
+        accounts = self.list_accounts()
+        if only_account:
+            accounts = [a for a in accounts if a["home_account_id"] == only_account]
+        for acc in accounts:
             entry: dict[str, Any] = {
                 "account": acc["username"],
                 "home_account_id": acc["home_account_id"],
+                "has_more": False,
             }
             try:
-                entry["messages"] = self.get_messages(
-                    acc["home_account_id"], count, unread_only=unread_only
+                res = self.get_messages(
+                    acc["home_account_id"],
+                    count=count,
+                    skip=skip,
+                    folder=folder,
+                    unread_only=unread_only,
+                    has_attachments=has_attachments,
+                    sender=sender,
+                    date_from=date_from,
+                    date_to=date_to,
                 )
+                entry["messages"] = res["messages"]
+                entry["has_more"] = res["has_more"]
             except Exception as exc:  # noqa: BLE001
                 entry["error"] = str(exc)
                 entry["messages"] = []

@@ -2,10 +2,21 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 
 from config import CLIENT_ID, DEFAULT_MAIL_COUNT
 
 router = APIRouter(prefix="/api/outlook", tags=["outlook"])
+
+# Map tên thư mục thân thiện -> well-known folder của Graph
+FOLDER_MAP = {
+    "inbox": "inbox",
+    "sent": "sentitems",
+    "drafts": "drafts",
+    "junk": "junkemail",
+    "deleted": "deleteditems",
+    "archive": "archive",
+}
 
 
 @router.get("/status")
@@ -56,28 +67,54 @@ def remove_account(home_account_id: str) -> dict:
     return {"ok": True}
 
 
+@router.get("/unread-counts")
+def unread_counts() -> dict:
+    """Số mail chưa đọc trong Inbox của từng tài khoản (cho badge)."""
+    from engine import engine
+
+    return {"counts": engine.account_unread_counts()}
+
+
 @router.get("/inbox")
-def unified_inbox(count: int = DEFAULT_MAIL_COUNT, unread_only: bool = False) -> dict:
-    """Hộp thư gộp của tất cả tài khoản đã đăng nhập."""
+def unified_inbox(
+    count: int = DEFAULT_MAIL_COUNT,
+    skip: int = 0,
+    folder: str = "inbox",
+    unread_only: bool = False,
+    has_attachments: bool = False,
+    sender: str = "",
+    date_from: str = "",
+    date_to: str = "",
+    account: str = "",
+) -> dict:
+    """Hộp thư gộp (theo thư mục, có lọc & phân trang)."""
     from engine import engine
 
     if not engine.list_accounts():
         return {"inboxes": []}
-    return {"inboxes": engine.get_unified_inbox(count=count, unread_only=unread_only)}
+    graph_folder = FOLDER_MAP.get(folder, "inbox")
+    return {
+        "inboxes": engine.get_unified_inbox(
+            count=count,
+            skip=skip,
+            folder=graph_folder,
+            unread_only=unread_only,
+            has_attachments=has_attachments,
+            sender=sender or None,
+            date_from=date_from or None,
+            date_to=date_to or None,
+            only_account=account or None,
+        )
+    }
 
 
-@router.get("/inbox/{home_account_id}")
-def single_inbox(
-    home_account_id: str, count: int = DEFAULT_MAIL_COUNT, unread_only: bool = False
-) -> dict:
+@router.get("/folders/{home_account_id}")
+def folders(home_account_id: str) -> dict:
+    """Danh sách thư mục mail của 1 tài khoản."""
     from engine import engine
 
     try:
-        return {
-            "messages": engine.get_messages(
-                home_account_id, count=count, unread_only=unread_only
-            )
-        }
+        return {"folders": engine.list_folders(home_account_id)}
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -104,6 +141,40 @@ def message_detail(home_account_id: str, message_id: str) -> dict:
         return engine.get_message_detail(home_account_id, message_id)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/message/{home_account_id}/{message_id}/attachments")
+def list_attachments(home_account_id: str, message_id: str) -> dict:
+    """Danh sách file đính kèm của 1 mail."""
+    from engine import engine
+
+    try:
+        return {"attachments": engine.list_attachments(home_account_id, message_id)}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/message/{home_account_id}/{message_id}/attachments/{attachment_id}")
+def download_attachment(
+    home_account_id: str, message_id: str, attachment_id: str
+) -> Response:
+    """Tải 1 file đính kèm về."""
+    from urllib.parse import quote
+
+    from engine import engine
+
+    try:
+        att = engine.get_attachment(home_account_id, message_id, attachment_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    filename = quote(att["name"])
+    return Response(
+        content=att["bytes"],
+        media_type=att["content_type"],
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{filename}"
+        },
+    )
 
 
 @router.post("/message/{home_account_id}/{message_id}/read")

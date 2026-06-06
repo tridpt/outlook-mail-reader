@@ -101,3 +101,50 @@ code {
   flex: 1; min-height: 320px; width: 100%; border: 1px solid var(--border);
   border-radius: 10px; background: #fff;
 }
+
+/* ----- Folder tabs ----- */
+.folder-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 14px; }
+.ftab {
+  background: #262a3a; color: var(--muted); border: 1px solid var(--border);
+  border-radius: 8px; padding: 7px 12px; cursor: pointer; font-size: .85rem;
+}
+.ftab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+/* ----- Bộ lọc nâng cao ----- */
+.filters-box {
+  margin-top: 12px; padding: 14px; background: #10131c;
+  border: 1px solid var(--border); border-radius: 10px;
+}
+.filter-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px;
+}
+.filter-grid label { display: flex; flex-direction: column; gap: 4px; font-size: .8rem; color: var(--muted); }
+.filter-grid input, .filter-grid select {
+  padding: 8px 10px; background: #1a1d29; color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; font-size: .9rem;
+}
+
+/* ----- Badge chưa đọc ----- */
+.badge {
+  background: var(--accent); color: #fff; border-radius: 999px;
+  padding: 1px 8px; font-size: .72rem; font-weight: 700; margin-left: 6px;
+}
+.badge.zero { background: #333; color: var(--muted); }
+
+/* ----- Đính kèm trong mail ----- */
+.attachments { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 8px; }
+.att-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: #262a3a; border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 10px; font-size: .82rem; color: var(--text); text-decoration: none;
+}
+.att-chip:hover { border-color: var(--accent); }
+.att-chip .sz { color: var(--muted); font-size: .75rem; }
+
+/* ----- Có đính kèm trên list ----- */
+.clip { color: var(--muted); font-size: .8rem; }
+
+/* ----- Nút tải thêm ----- */
+.load-more {
+  width: 100%; margin: 4px 0 12px; background: #1a1d29;
+}

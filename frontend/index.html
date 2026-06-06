@@ -34,14 +34,24 @@
 
     <div class="card">
       <div class="row between" style="flex-wrap:wrap; gap:10px;">
-        <h2 style="margin:0;">Hộp thư gộp</h2>
+        <h2 style="margin:0;">Hộp thư</h2>
         <div class="row" style="gap:8px;">
-          <label class="row small" style="gap:6px; cursor:pointer;">
-            <input type="checkbox" id="chk-unread" /> Chỉ chưa đọc
-          </label>
-          <button class="btn" id="btn-refresh">🔄 Tải mail</button>
+          <button class="btn small" id="btn-filters">⚙ Bộ lọc</button>
+          <button class="btn" id="btn-refresh">🔄 Tải lại</button>
         </div>
       </div>
+
+      <!-- Chọn thư mục -->
+      <div class="folder-tabs" id="folder-tabs">
+        <button class="ftab active" data-folder="inbox">📥 Inbox</button>
+        <button class="ftab" data-folder="sent">📤 Đã gửi</button>
+        <button class="ftab" data-folder="drafts">📝 Nháp</button>
+        <button class="ftab" data-folder="junk">🚫 Spam</button>
+        <button class="ftab" data-folder="deleted">🗑 Đã xóa</button>
+        <button class="ftab" data-folder="archive">🗄 Lưu trữ</button>
+      </div>
+
+      <!-- Tìm kiếm -->
       <div class="row" style="margin-top:12px; gap:8px;">
         <input type="text" id="search-input" placeholder="🔎 Tìm mail trên tất cả tài khoản…"
           style="flex:1; padding:10px 12px; background:#10131c; color:var(--text);
@@ -49,8 +59,37 @@
         <button class="btn" id="btn-search">Tìm</button>
         <button class="btn" id="btn-clear" style="display:none;">✕</button>
       </div>
+
+      <!-- Bộ lọc nâng cao (ẩn mặc định) -->
+      <div id="filters" class="filters-box" style="display:none;">
+        <div class="filter-grid">
+          <label>Tài khoản
+            <select id="f-account"><option value="">Tất cả</option></select>
+          </label>
+          <label>Người gửi
+            <input type="text" id="f-sender" placeholder="tên hoặc email" />
+          </label>
+          <label>Từ ngày
+            <input type="date" id="f-from" />
+          </label>
+          <label>Đến ngày
+            <input type="date" id="f-to" />
+          </label>
+        </div>
+        <div class="row" style="gap:16px; margin-top:10px; flex-wrap:wrap;">
+          <label class="row small" style="gap:6px; cursor:pointer;">
+            <input type="checkbox" id="f-unread" /> Chỉ chưa đọc
+          </label>
+          <label class="row small" style="gap:6px; cursor:pointer;">
+            <input type="checkbox" id="f-att" /> Có đính kèm
+          </label>
+          <button class="btn small primary" id="btn-apply">Áp dụng</button>
+          <button class="btn small" id="btn-reset">Xóa lọc</button>
+        </div>
+      </div>
+
       <div id="inbox" style="margin-top:14px;">
-        <p class="hint">Thêm tài khoản rồi bấm "Tải mail" để xem.</p>
+        <p class="hint">Thêm tài khoản rồi bấm "Tải lại" để xem.</p>
       </div>
     </div>
   </div>
@@ -63,6 +102,7 @@
         <button class="btn" id="m-close">✕</button>
       </div>
       <p class="mail-meta" id="m-meta"></p>
+      <div id="m-attachments" class="attachments" style="display:none;"></div>
       <div class="row" style="gap:8px; margin:6px 0 12px;">
         <button class="btn small" id="m-toggle-read">Đánh dấu chưa đọc</button>
         <a class="btn small" id="m-weblink" href="#" target="_blank" rel="noopener">Mở trên Outlook ↗</a>

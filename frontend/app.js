@@ -1,5 +1,6 @@
 // Hộp thư Outlook đa tài khoản — gọi API backend (Microsoft Graph + OAuth)
 const API = "/api/outlook";
+const PAGE = 20;
 
 const el = (id) => document.getElementById(id);
 
@@ -19,9 +20,41 @@ function fmtDate(iso) {
   return d.toLocaleString("vi-VN", { dateStyle: "short", timeStyle: "short" });
 }
 
+function fmtSize(n) {
+  if (!n) return "";
+  if (n < 1024) return n + " B";
+  if (n < 1048576) return (n / 1024).toFixed(0) + " KB";
+  return (n / 1048576).toFixed(1) + " MB";
+}
+
 function escapeHtml(s) {
   return (s || "").replace(/[&<>"]/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+// ---------- State ----------
+const state = {
+  folder: "inbox",
+  searchMode: false,
+  order: [],        // [{accId, name}]
+  loaded: {},       // accId -> [messages]
+  pages: {},        // accId -> số trang đã tải (để tính $skip server)
+  hasMore: {},      // accId -> bool
+};
+
+function filterParams() {
+  const p = new URLSearchParams();
+  p.set("folder", state.folder);
+  p.set("count", PAGE);
+  if (el("f-unread").checked) p.set("unread_only", "true");
+  if (el("f-att").checked) p.set("has_attachments", "true");
+  const sender = el("f-sender").value.trim();
+  if (sender) p.set("sender", sender);
+  if (el("f-from").value) p.set("date_from", el("f-from").value);
+  if (el("f-to").value) p.set("date_to", el("f-to").value);
+  const acc = el("f-account").value;
+  if (acc) p.set("account", acc);
+  return p;
 }
 
 // ---------- Tài khoản ----------
@@ -29,11 +62,19 @@ async function loadStatus() {
   const s = await api("/status");
   el("not-configured").style.display = s.configured ? "none" : "block";
   renderAccounts(s.accounts || []);
+  if (s.accounts && s.accounts.length) loadUnreadCounts();
   return s;
 }
 
 function renderAccounts(accounts) {
   const box = el("accounts");
+  // Cập nhật dropdown lọc theo tài khoản
+  const sel = el("f-account");
+  const cur = sel.value;
+  sel.innerHTML = `<option value="">Tất cả</option>` +
+    accounts.map((a) => `<option value="${a.home_account_id}">${escapeHtml(a.username)}</option>`).join("");
+  sel.value = cur;
+
   if (!accounts.length) {
     box.innerHTML = `<p class="hint">Chưa có tài khoản nào. Bấm "+ Thêm tài khoản".</p>`;
     return;
@@ -41,7 +82,7 @@ function renderAccounts(accounts) {
   box.innerHTML = accounts.map((a) => `
     <div class="acct-chip">
       <span>✉️</span>
-      <span class="email">${escapeHtml(a.username)}</span>
+      <span class="email">${escapeHtml(a.username)}<span class="badge zero" data-badge="${a.home_account_id}"></span></span>
       <button class="danger small" data-id="${a.home_account_id}">Xóa</button>
     </div>`).join("");
   box.querySelectorAll("button.danger").forEach((b) => {
@@ -51,6 +92,19 @@ function renderAccounts(accounts) {
       loadStatus();
     };
   });
+}
+
+async function loadUnreadCounts() {
+  try {
+    const data = await api("/unread-counts");
+    data.counts.forEach((c) => {
+      const badge = document.querySelector(`[data-badge="${c.home_account_id}"]`);
+      if (!badge) return;
+      if (c.unread == null) { badge.textContent = ""; return; }
+      badge.textContent = c.unread;
+      badge.classList.toggle("zero", c.unread === 0);
+    });
+  } catch (_) { /* badge là phụ, lỗi thì bỏ qua */ }
 }
 
 // ---------- Đăng nhập (device code flow) ----------
@@ -84,43 +138,120 @@ async function pollLogin(jobId) {
       el("btn-add").disabled = false;
       return;
     }
-    setTimeout(() => pollLogin(jobId), 2500); // pending -> poll tiếp
+    setTimeout(() => pollLogin(jobId), 2500);
   } catch (e) {
     el("login-status").textContent = "❌ " + e.message;
     el("btn-add").disabled = false;
   }
 }
 
-// ---------- Hộp thư / Tìm kiếm ----------
+// ---------- Hộp thư ----------
 async function loadInbox() {
+  state.searchMode = false;
+  el("btn-clear").style.display = "none";
+  el("search-input").value = "";
   const box = el("inbox");
-  const unread = el("chk-unread").checked;
   box.innerHTML = `<p class="hint">Đang tải mail…</p>`;
   try {
-    const data = await api(`/inbox?count=20&unread_only=${unread}`);
+    const p = filterParams();
+    p.set("skip", 0);
+    const data = await api("/inbox?" + p.toString());
     if (!data.inboxes.length) {
       box.innerHTML = `<p class="hint">Chưa có tài khoản nào. Hãy thêm tài khoản trước.</p>`;
       return;
     }
-    renderGroups(data.inboxes);
+    state.order = [];
+    state.loaded = {}; state.pages = {}; state.hasMore = {};
+    data.inboxes.forEach((g) => {
+      state.order.push({ accId: g.home_account_id, name: g.account, error: g.error });
+      state.loaded[g.home_account_id] = g.messages || [];
+      state.pages[g.home_account_id] = 1;
+      state.hasMore[g.home_account_id] = g.has_more;
+    });
+    renderInbox();
   } catch (e) {
     box.innerHTML = `<p class="hint">❌ ${escapeHtml(e.message)}</p>`;
   }
 }
 
+async function loadMore(accId) {
+  try {
+    const p = filterParams();
+    p.set("account", accId);
+    p.set("skip", state.pages[accId] * PAGE);
+    const data = await api("/inbox?" + p.toString());
+    const g = data.inboxes.find((x) => x.home_account_id === accId);
+    if (g) {
+      state.loaded[accId] = state.loaded[accId].concat(g.messages || []);
+      state.pages[accId] += 1;
+      state.hasMore[accId] = g.has_more;
+    }
+    renderInbox();
+  } catch (e) {
+    alert("Không tải thêm được: " + e.message);
+  }
+}
+
+function renderInbox() {
+  const box = el("inbox");
+  if (!state.order.length) {
+    box.innerHTML = `<p class="hint">Không có mail.</p>`;
+    return;
+  }
+  box.innerHTML = state.order.map((g) => {
+    const head = `<div class="group-head">📥 ${escapeHtml(g.name)}</div>`;
+    if (g.error) return head + `<p class="hint">❌ ${escapeHtml(g.error)}</p>`;
+    const msgs = state.loaded[g.accId] || [];
+    if (!msgs.length) return head + `<p class="hint">Không có mail.</p>`;
+    const items = msgs.map((m) => mailItemHtml(g.accId, m)).join("");
+    const more = state.hasMore[g.accId]
+      ? `<button class="btn small load-more" data-more="${g.accId}">⬇ Tải thêm</button>`
+      : "";
+    return head + items + more;
+  }).join("");
+  bindInboxEvents();
+}
+
+function mailItemHtml(accId, m) {
+  const clip = m.has_attachments ? ` <span class="clip">📎</span>` : "";
+  return `
+    <div class="mail-item ${m.is_read ? "" : "unread"}" data-acct="${accId}" data-id="${m.id}">
+      <p class="mail-subject">${escapeHtml(m.subject)}${clip}</p>
+      <p class="mail-meta">${escapeHtml(m.from_name || m.from_address)} · ${fmtDate(m.received)}</p>
+      <p class="mail-preview">${escapeHtml(m.preview)}</p>
+    </div>`;
+}
+
+function bindInboxEvents() {
+  el("inbox").querySelectorAll(".mail-item").forEach((node) => {
+    node.onclick = () => openMail(node.dataset.acct, node.dataset.id);
+  });
+  el("inbox").querySelectorAll("[data-more]").forEach((b) => {
+    b.onclick = () => loadMore(b.dataset.more);
+  });
+}
+
+// ---------- Tìm kiếm ----------
 async function doSearch() {
   const q = el("search-input").value.trim();
   if (!q) { loadInbox(); return; }
+  state.searchMode = true;
+  el("btn-clear").style.display = "inline-block";
   const box = el("inbox");
   box.innerHTML = `<p class="hint">Đang tìm "${escapeHtml(q)}"…</p>`;
-  el("btn-clear").style.display = "inline-block";
   try {
     const data = await api(`/search?q=${encodeURIComponent(q)}&count=20`);
     if (!data.results.length) {
       box.innerHTML = `<p class="hint">Không có tài khoản nào.</p>`;
       return;
     }
-    renderGroups(data.results);
+    box.innerHTML = data.results.map((g) => {
+      const head = `<div class="group-head">🔎 ${escapeHtml(g.account)}</div>`;
+      if (g.error) return head + `<p class="hint">❌ ${escapeHtml(g.error)}</p>`;
+      if (!g.messages.length) return head + `<p class="hint">Không có kết quả.</p>`;
+      return head + g.messages.map((m) => mailItemHtml(g.home_account_id, m)).join("");
+    }).join("");
+    bindInboxEvents();
   } catch (e) {
     box.innerHTML = `<p class="hint">❌ ${escapeHtml(e.message)}</p>`;
   }
@@ -132,50 +263,28 @@ function clearSearch() {
   loadInbox();
 }
 
-function renderGroups(groups) {
-  el("inbox").innerHTML = groups.map(renderGroup).join("");
-  // Gắn sự kiện click mở chi tiết
-  el("inbox").querySelectorAll(".mail-item").forEach((node) => {
-    node.onclick = () => openMail(node.dataset.acct, node.dataset.id);
-  });
-}
-
-function renderGroup(group) {
-  const head = `<div class="group-head">📥 ${escapeHtml(group.account)}</div>`;
-  if (group.error) return head + `<p class="hint">❌ ${escapeHtml(group.error)}</p>`;
-  if (!group.messages.length) return head + `<p class="hint">Không có mail.</p>`;
-  const items = group.messages.map((m) => `
-    <div class="mail-item ${m.is_read ? "" : "unread"}"
-         data-acct="${group.home_account_id}" data-id="${m.id}">
-      <p class="mail-subject">${escapeHtml(m.subject)}</p>
-      <p class="mail-meta">${escapeHtml(m.from_name || m.from_address)} · ${fmtDate(m.received)}</p>
-      <p class="mail-preview">${escapeHtml(m.preview)}</p>
-    </div>`).join("");
-  return head + items;
-}
-
 // ---------- Chi tiết mail (modal) ----------
-let currentMail = null; // { acct, id, is_read }
+let currentMail = null;
 
 async function openMail(acct, id) {
   el("modal").style.display = "flex";
   el("m-subject").textContent = "Đang tải…";
   el("m-meta").textContent = "";
+  el("m-attachments").style.display = "none";
+  el("m-attachments").innerHTML = "";
   el("m-body").srcdoc = "";
   try {
     const m = await api(`/message/${encodeURIComponent(acct)}/${encodeURIComponent(id)}`);
     currentMail = { acct, id, is_read: m.is_read };
     el("m-subject").textContent = m.subject;
     const to = m.to && m.to.length ? ` → ${m.to.map(escapeHtml).join(", ")}` : "";
-    el("m-meta").innerHTML =
-      `${escapeHtml(m.from_name || m.from_address)}${to} · ${fmtDate(m.received)}`;
+    el("m-meta").innerHTML = `${escapeHtml(m.from_name || m.from_address)}${to} · ${fmtDate(m.received)}`;
     el("m-weblink").href = m.web_link || "#";
-    // Render body trong iframe sandbox (không chạy script -> an toàn)
     el("m-body").srcdoc = m.body_type === "html"
       ? m.body
       : `<pre style="white-space:pre-wrap;font-family:system-ui;padding:12px;">${escapeHtml(m.body)}</pre>`;
     updateToggleLabel();
-    // Mở mail thì coi như đã đọc
+    if (m.has_attachments) loadAttachments(acct, id);
     if (!m.is_read) setRead(true, false);
   } catch (e) {
     el("m-subject").textContent = "Lỗi";
@@ -183,13 +292,26 @@ async function openMail(acct, id) {
   }
 }
 
+async function loadAttachments(acct, id) {
+  try {
+    const data = await api(`/message/${encodeURIComponent(acct)}/${encodeURIComponent(id)}/attachments`);
+    const atts = (data.attachments || []).filter((a) => !a.is_inline);
+    if (!atts.length) return;
+    const box = el("m-attachments");
+    box.style.display = "flex";
+    box.innerHTML = atts.map((a) => {
+      const url = `${API}/message/${encodeURIComponent(acct)}/${encodeURIComponent(id)}/attachments/${encodeURIComponent(a.id)}`;
+      return `<a class="att-chip" href="${url}" download>📎 ${escapeHtml(a.name)} <span class="sz">${fmtSize(a.size)}</span></a>`;
+    }).join("");
+  } catch (_) { /* đính kèm là phụ */ }
+}
+
 function updateToggleLabel() {
-  el("m-toggle-read").textContent = currentMail?.is_read
-    ? "Đánh dấu chưa đọc" : "Đánh dấu đã đọc";
+  el("m-toggle-read").textContent = currentMail?.is_read ? "Đánh dấu chưa đọc" : "Đánh dấu đã đọc";
 }
 
 async function setRead(isRead, refresh = true) {
-  const mail = currentMail; // chụp tham chiếu, tránh bị null hóa giữa chừng
+  const mail = currentMail;
   if (!mail) return;
   try {
     await api(
@@ -205,8 +327,8 @@ async function setRead(isRead, refresh = true) {
 }
 
 function refreshCurrentView() {
-  const q = el("search-input").value.trim();
-  if (q) doSearch(); else loadInbox();
+  loadUnreadCounts();
+  if (state.searchMode) doSearch(); else loadInbox();
 }
 
 function closeModal() {
@@ -215,13 +337,34 @@ function closeModal() {
   refreshCurrentView();
 }
 
-// ---------- Khởi tạo ----------
+// ---------- Sự kiện ----------
 el("btn-add").onclick = startLogin;
-el("btn-refresh").onclick = loadInbox;
-el("chk-unread").onchange = loadInbox;
+el("btn-refresh").onclick = () => (state.searchMode ? doSearch() : loadInbox());
 el("btn-search").onclick = doSearch;
 el("btn-clear").onclick = clearSearch;
 el("search-input").addEventListener("keydown", (e) => { if (e.key === "Enter") doSearch(); });
+
+el("btn-filters").onclick = () => {
+  const f = el("filters");
+  f.style.display = f.style.display === "none" ? "block" : "none";
+};
+el("btn-apply").onclick = loadInbox;
+el("btn-reset").onclick = () => {
+  el("f-account").value = ""; el("f-sender").value = "";
+  el("f-from").value = ""; el("f-to").value = "";
+  el("f-unread").checked = false; el("f-att").checked = false;
+  loadInbox();
+};
+
+el("folder-tabs").querySelectorAll(".ftab").forEach((b) => {
+  b.onclick = () => {
+    el("folder-tabs").querySelectorAll(".ftab").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
+    state.folder = b.dataset.folder;
+    loadInbox();
+  };
+});
+
 el("m-close").onclick = closeModal;
 el("m-toggle-read").onclick = () => { if (currentMail) setRead(!currentMail.is_read); };
 el("modal").addEventListener("click", (e) => { if (e.target.id === "modal") closeModal(); });
