@@ -64,11 +64,33 @@ def accounts() -> dict:
 def import_refresh_token(payload: ImportRefreshTokenRequest) -> dict:
     from engine import engine
 
-    try:
-        account = engine.import_refresh_token_account(payload.line)
-        return {"ok": True, "account": account}
-    except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    lines = [line.strip() for line in payload.line.splitlines() if line.strip()]
+    if not lines:
+        raise HTTPException(
+            status_code=400,
+            detail="Thiếu dòng import email|password|refresh_token|client_id.",
+        )
+
+    results = []
+    for idx, line in enumerate(lines, start=1):
+        try:
+            account = engine.import_refresh_token_account(line)
+            results.append({"line": idx, "ok": True, "account": account})
+        except RuntimeError as exc:
+            results.append({"line": idx, "ok": False, "error": str(exc)})
+
+    added = sum(1 for item in results if item["ok"])
+    failed = len(results) - added
+    if len(lines) == 1 and failed:
+        raise HTTPException(status_code=400, detail=results[0]["error"])
+
+    return {
+        "ok": failed == 0,
+        "added": added,
+        "failed": failed,
+        "results": results,
+        "account": results[0].get("account") if len(results) == 1 and added else None,
+    }
 
 
 @router.delete("/accounts/{home_account_id}")

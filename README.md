@@ -68,14 +68,25 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8809
 
 Mở trình duyệt: <http://localhost:8809>
 
+### Chạy nhanh trên Windows
+
+```bat
+start_outlook_reader.bat
+```
+
+File này tự tạo `.venv` nếu chưa có, cài `requirements.txt`, set
+`OUTLOOK_CLIENT_ID`, rồi chạy server ở port `8809`.
+
 ## Dùng
 
 1. Bấm **+ Thêm tài khoản** → mở link, nhập mã hiển thị, đăng nhập Microsoft
 2. Lặp lại cho từng tài khoản (mỗi cái chỉ 1 lần)
-3. Bấm **🔄 Tải mail** để xem hộp thư gộp của tất cả tài khoản
-4. Bấm vào một mail để xem nội dung đầy đủ; trong cửa sổ chi tiết có nút
+3. Hoặc mở **Nhập refresh token** và dán một hay nhiều dòng
+   `email|password|refresh_token|client_id`; app bỏ qua password và chỉ lưu token mã hóa
+4. Bấm **🔄 Tải mail** để xem hộp thư gộp của tất cả tài khoản
+5. Bấm vào một mail để xem nội dung đầy đủ; trong cửa sổ chi tiết có nút
    đánh dấu đã đọc / chưa đọc
-5. Dùng ô tìm kiếm để tìm mail trên mọi tài khoản; tích "Chỉ chưa đọc" để lọc
+6. Dùng ô tìm kiếm để tìm mail trên mọi tài khoản; tích "Chỉ chưa đọc" để lọc
 
 Token mã hóa lưu tại `storage/`. Xóa thư mục này nếu muốn đăng xuất hết tài khoản.
 
@@ -87,6 +98,7 @@ Token mã hóa lưu tại `storage/`. Xóa thư mục này nếu muốn đăng x
 | POST | `/api/outlook/login/start` | Bắt đầu đăng nhập (trả về code + link) |
 | GET | `/api/outlook/login/status/{job_id}` | Poll trạng thái đăng nhập |
 | GET | `/api/outlook/accounts` | Danh sách tài khoản |
+| POST | `/api/outlook/accounts/import-refresh-token` | Import một hoặc nhiều dòng refresh token |
 | DELETE | `/api/outlook/accounts/{id}` | Xóa tài khoản khỏi cache |
 | GET | `/api/outlook/inbox` | Hộp thư gộp (tham số `unread_only`) |
 | GET | `/api/outlook/inbox/{id}` | Hộp thư của 1 tài khoản |

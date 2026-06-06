@@ -106,25 +106,27 @@ async function importRefreshToken() {
     status.textContent = "Chưa có dòng token.";
     return;
   }
-  if (lines.length !== 1) {
-    status.textContent = "Chỉ nhập 1 dòng mỗi lần.";
-    return;
-  }
-  if (lines[0].split("|").length !== 4) {
-    status.textContent = "Sai định dạng email|password|refresh_token|client_id.";
+  const badLine = lines.findIndex((line) => line.split("|").length !== 4);
+  if (badLine >= 0) {
+    status.textContent = `Dòng ${badLine + 1} sai định dạng email|password|refresh_token|client_id.`;
     return;
   }
   button.disabled = true;
-  status.textContent = "Đang kiểm tra token…";
+  status.textContent = `Đang kiểm tra ${lines.length} token…`;
   try {
     const data = await api("/accounts/import-refresh-token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ line: lines[0] }),
+      body: JSON.stringify({ line: lines.join("\n") }),
     });
-    const account = data.account || {};
-    input.value = "";
-    status.textContent = `Đã thêm ${account.username || "tài khoản"} (${account.source || "token"}).`;
+    const added = data.added ?? (data.account ? 1 : 0);
+    const failed = data.failed ?? 0;
+    if (!failed) input.value = "";
+    const failedItems = (data.results || []).filter((item) => !item.ok);
+    const firstError = failedItems[0]
+      ? ` Lỗi dòng ${failedItems[0].line}: ${failedItems[0].error}`
+      : "";
+    status.textContent = `Đã thêm ${added}/${lines.length} tài khoản. Lỗi: ${failed}.${firstError}`;
     await loadStatus();
   } catch (e) {
     status.textContent = "Lỗi: " + e.message;
