@@ -105,6 +105,28 @@ code {
   font-size: .72rem;
   white-space: nowrap;
 }
+.health {
+  display: inline-block;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: .72rem;
+  white-space: nowrap;
+}
+.health.ok {
+  color: #c9f7de;
+  border-color: #2d6a4f;
+  background: #12301f;
+}
+.health.fail {
+  color: #ffc6c6;
+  border-color: #6a3030;
+  background: #341a1d;
+}
+.health.unknown {
+  color: var(--muted);
+  background: #10131c;
+}
 
 .mail-item {
   border: 1px solid var(--border); border-radius: 10px;

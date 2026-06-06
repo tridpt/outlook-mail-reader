@@ -109,6 +109,45 @@ class OutlookEngine:
         return self._imported.get("accounts", {}).get(home_account_id)
 
     @staticmethod
+    def _classify_graph_error(status_code: int, text: str) -> str:
+        lowered = text.lower()
+        if status_code in (401, 403) and any(
+            key in lowered
+            for key in ("invalid_grant", "expired", "interaction_required", "aadsts")
+        ):
+            return "token_expired"
+        if status_code == 403 and any(
+            key in lowered for key in ("insufficient", "scope", "privileges", "access")
+        ):
+            return "missing_scope"
+        if status_code == 404:
+            return "mailbox_error"
+        return "graph_error"
+
+    @staticmethod
+    def _classify_exception(exc: Exception, source: str) -> str:
+        text = str(exc).lower()
+        if any(key in text for key in ("invalid_grant", "expired", "interaction_required", "aadsts")):
+            return "token_expired"
+        if any(key in text for key in ("scope", "insufficient", "privileges", "access denied")):
+            return "missing_scope"
+        if source == "imap":
+            return "imap_error"
+        return "graph_error"
+
+    @staticmethod
+    def _health_label(status: str) -> str:
+        return {
+            "ok": "OK",
+            "token_expired": "Token expired",
+            "missing_scope": "Thiếu scope",
+            "graph_error": "Graph lỗi",
+            "imap_error": "IMAP lỗi",
+            "mailbox_error": "Mailbox lỗi",
+            "not_found": "Không tìm thấy",
+        }.get(status, status)
+
+    @staticmethod
     def _parse_import_line(line: str) -> dict[str, str]:
         parts = [p.strip() for p in line.strip().split("|")]
         if len(parts) != 4:
@@ -430,6 +469,98 @@ class OutlookEngine:
             f"{account.get('client_id', '')}"
         )
         return self.import_refresh_token_account(line)
+
+    def check_account_health(self, home_account_id: str) -> dict[str, Any]:
+        account_meta = next(
+            (
+                account
+                for account in self.list_accounts()
+                if account["home_account_id"] == home_account_id
+            ),
+            None,
+        )
+        if not account_meta:
+            return {
+                "ok": False,
+                "status": "not_found",
+                "label": self._health_label("not_found"),
+                "detail": "Không tìm thấy account.",
+            }
+
+        imap_account = self._imap_account(home_account_id)
+        if imap_account:
+            try:
+                mail = self._imap_connect(imap_account)
+                try:
+                    selected = self._imap_select(mail, "inbox", readonly=True)
+                finally:
+                    self._imap_logout(mail)
+                return {
+                    "ok": True,
+                    "status": "ok",
+                    "label": self._health_label("ok"),
+                    "source": "imap",
+                    "email": account_meta["username"],
+                    "detail": f"IMAP OK, mở được {selected}.",
+                }
+            except Exception as exc:  # noqa: BLE001
+                status = self._classify_exception(exc, "imap")
+                return {
+                    "ok": False,
+                    "status": status,
+                    "label": self._health_label(status),
+                    "source": "imap",
+                    "email": account_meta["username"],
+                    "detail": str(exc)[:300],
+                }
+
+        try:
+            token = self._token_for(home_account_id)
+        except Exception as exc:  # noqa: BLE001
+            status = self._classify_exception(exc, "graph")
+            return {
+                "ok": False,
+                "status": status,
+                "label": self._health_label(status),
+                "source": "graph",
+                "email": account_meta["username"],
+                "detail": str(exc)[:300],
+            }
+
+        try:
+            resp = requests.get(
+                f"{GRAPH_BASE}/me/messages?$top=1&$select=id",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=30,
+            )
+            if resp.status_code == 200:
+                count = len(resp.json().get("value", []) or [])
+                return {
+                    "ok": True,
+                    "status": "ok",
+                    "label": self._health_label("ok"),
+                    "source": "graph",
+                    "email": account_meta["username"],
+                    "detail": f"Graph OK, đọc thử {count} mail.",
+                }
+            status = self._classify_graph_error(resp.status_code, resp.text)
+            return {
+                "ok": False,
+                "status": status,
+                "label": self._health_label(status),
+                "source": "graph",
+                "email": account_meta["username"],
+                "detail": f"Graph {resp.status_code}: {resp.text[:250]}",
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "ok": False,
+                "status": "graph_error",
+                "label": self._health_label("graph_error"),
+                "source": "graph",
+                "email": account_meta["username"],
+                "detail": str(exc)[:300],
+            }
 
     def import_refresh_token_lines(self, lines: list[str]) -> dict[str, Any]:
         results = [self._import_line_result(idx, line) for idx, line in enumerate(lines, 1)]

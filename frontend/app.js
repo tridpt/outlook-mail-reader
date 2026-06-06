@@ -42,6 +42,7 @@ const state = {
   hasMore: {},      // accId -> bool
   accounts: [],
   tokenUpdateAccountId: null,
+  accountHealth: {},
   importJob: {
     id: null,
     status: "",
@@ -101,6 +102,7 @@ function renderAccounts(accounts) {
             <th>Scope</th>
             <th>Cập nhật</th>
             <th>Chưa đọc</th>
+            <th>Health</th>
             <th></th>
           </tr>
         </thead>
@@ -119,6 +121,9 @@ function renderAccounts(accounts) {
   box.querySelectorAll("[data-update-token]").forEach((b) => {
     b.onclick = () => openTokenModal(b.dataset.updateToken);
   });
+  box.querySelectorAll("[data-check-account]").forEach((b) => {
+    b.onclick = () => checkAccountHealth(b.dataset.checkAccount);
+  });
 }
 
 function accountRowHtml(a) {
@@ -126,6 +131,10 @@ function accountRowHtml(a) {
   const source = a.source ? `<span class="source">${escapeHtml(a.source)}</span>` : "";
   const scope = a.scope ? `<span class="scope">${escapeHtml(shortScope(a.scope))}</span>` : "—";
   const updated = a.updated_at ? fmtDate(a.updated_at) : "—";
+  const health = state.accountHealth[a.home_account_id];
+  const healthHtml = health
+    ? `<span class="health ${health.ok ? "ok" : "fail"}" title="${escapeHtml(health.detail || "")}">${escapeHtml(health.label || health.status)}</span>`
+    : `<span class="health unknown">—</span>`;
   const updateButton = a.can_update_token
     ? `<button class="btn small" data-update-token="${id}">Đổi token</button>`
     : `<button class="btn small" disabled>Đổi token</button>`;
@@ -136,7 +145,9 @@ function accountRowHtml(a) {
       <td>${scope}</td>
       <td>${escapeHtml(updated)}</td>
       <td><span class="badge zero" data-badge="${id}"></span></td>
+      <td>${healthHtml}</td>
       <td class="account-actions">
+        <button class="btn small" data-check-account="${id}">Kiểm tra</button>
         ${updateButton}
         <button class="danger small" data-id="${id}">Xóa</button>
       </td>
@@ -147,6 +158,29 @@ function shortScope(scope) {
   return (scope || "")
     .replaceAll("https://graph.microsoft.com/", "")
     .replaceAll("https://outlook.office.com/", "");
+}
+
+async function checkAccountHealth(accountId) {
+  state.accountHealth[accountId] = {
+    ok: false,
+    status: "checking",
+    label: "Đang kiểm tra",
+    detail: "",
+  };
+  renderAccounts(state.accounts);
+  try {
+    const result = await api(`/accounts/${encodeURIComponent(accountId)}/health`);
+    state.accountHealth[accountId] = result;
+  } catch (e) {
+    state.accountHealth[accountId] = {
+      ok: false,
+      status: "error",
+      label: "Lỗi",
+      detail: e.message,
+    };
+  }
+  renderAccounts(state.accounts);
+  loadUnreadCounts();
 }
 
 async function importRefreshToken() {

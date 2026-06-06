@@ -144,6 +144,13 @@ def update_refresh_token(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@router.get("/accounts/{home_account_id}/health")
+def account_health(home_account_id: str) -> dict:
+    from engine import engine
+
+    return engine.check_account_health(home_account_id)
+
+
 @router.delete("/accounts/{home_account_id}")
 def remove_account(home_account_id: str) -> dict:
     from engine import engine
