@@ -19,6 +19,7 @@ import uuid
 from datetime import datetime, timedelta
 from email import policy
 from email.parser import BytesParser
+from queue import Empty, Queue
 from typing import Any
 
 import msal
@@ -334,9 +335,16 @@ class OutlookEngine:
             "account": results[0].get("account") if len(results) == 1 and added else None,
         }
 
-    def begin_import_refresh_token_job(self, lines: list[str]) -> dict[str, Any]:
+    def begin_import_refresh_token_job(
+        self, lines: list[str], concurrency: int = 3
+    ) -> dict[str, Any]:
+        workers = min(max(concurrency, 1), 5)
+        workers = min(workers, len(lines))
         job_id = uuid.uuid4().hex
         now = self._now_iso()
+        work_queue: Queue[tuple[int, str]] = Queue()
+        for item in enumerate(lines, 1):
+            work_queue.put(item)
         job: dict[str, Any] = {
             "job_id": job_id,
             "status": "queued",
@@ -348,43 +356,66 @@ class OutlookEngine:
             "added": 0,
             "failed": 0,
             "current_line": None,
+            "current_lines": [],
             "cancel_requested": False,
+            "concurrency": workers,
+            "active_workers": workers,
             "results": [],
         }
         with self._lock:
             self._import_jobs[job_id] = job
 
-        def _worker() -> None:
+        def _worker(worker_id: int) -> None:
             with self._lock:
                 job["status"] = "running"
                 job["updated_at"] = self._now_iso()
-            for idx, line in enumerate(lines, 1):
+            try:
+                while True:
+                    with self._lock:
+                        if job["cancel_requested"]:
+                            break
+                    try:
+                        idx, line = work_queue.get_nowait()
+                    except Empty:
+                        break
+
+                    with self._lock:
+                        job.setdefault("current_lines", []).append(idx)
+                        job["current_lines"] = sorted(set(job["current_lines"]))
+                        job["current_line"] = job["current_lines"][0]
+                        job["updated_at"] = self._now_iso()
+
+                    result = self._import_line_result(idx, line)
+
+                    with self._lock:
+                        job["current_lines"] = [
+                            item for item in job["current_lines"] if item != idx
+                        ]
+                        job["current_line"] = (
+                            job["current_lines"][0] if job["current_lines"] else None
+                        )
+                        job["results"].append(result)
+                        job["processed"] += 1
+                        if result["ok"]:
+                            job["added"] += 1
+                        else:
+                            job["failed"] += 1
+                        job["updated_at"] = self._now_iso()
+                    work_queue.task_done()
+            finally:
                 with self._lock:
-                    if job["cancel_requested"]:
-                        job["status"] = "cancelled"
+                    job["active_workers"] -= 1
+                    if job["active_workers"] == 0:
                         job["current_line"] = None
+                        job["current_lines"] = []
+                        job["status"] = (
+                            "cancelled" if job["cancel_requested"] else "done"
+                        )
                         job["finished_at"] = self._now_iso()
                         job["updated_at"] = job["finished_at"]
-                        break
-                    job["current_line"] = idx
-                    job["updated_at"] = self._now_iso()
-                result = self._import_line_result(idx, line)
-                with self._lock:
-                    job["results"].append(result)
-                    job["processed"] += 1
-                    if result["ok"]:
-                        job["added"] += 1
-                    else:
-                        job["failed"] += 1
-                    job["updated_at"] = self._now_iso()
-            else:
-                with self._lock:
-                    job["status"] = "done"
-                    job["current_line"] = None
-                    job["finished_at"] = self._now_iso()
-                    job["updated_at"] = job["finished_at"]
 
-        threading.Thread(target=_worker, daemon=True).start()
+        for worker_id in range(workers):
+            threading.Thread(target=_worker, args=(worker_id,), daemon=True).start()
         return self.import_job_status(job_id)
 
     def import_job_status(
@@ -396,7 +427,7 @@ class OutlookEngine:
                 raise RuntimeError("Không tìm thấy import job.")
             safe_offset = max(offset, 0)
             safe_limit = min(max(limit, 1), 200)
-            results = list(job["results"])
+            results = sorted(job["results"], key=lambda item: item["line"])
             total_results = len(results)
             page = results[safe_offset : safe_offset + safe_limit]
             return {
@@ -410,7 +441,10 @@ class OutlookEngine:
                 "added": job["added"],
                 "failed": job["failed"],
                 "current_line": job["current_line"],
+                "current_lines": list(job.get("current_lines", [])),
                 "cancel_requested": job["cancel_requested"],
+                "concurrency": job.get("concurrency", 1),
+                "active_workers": job.get("active_workers", 0),
                 "result_count": total_results,
                 "offset": safe_offset,
                 "limit": safe_limit,

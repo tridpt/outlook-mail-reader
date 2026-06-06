@@ -145,6 +145,18 @@ code {
   font-size: .82rem;
   overflow-wrap: anywhere;
 }
+.import-concurrency {
+  gap: 6px;
+  color: var(--muted);
+}
+.import-concurrency input {
+  width: 58px;
+  padding: 7px 8px;
+  background: #10131c;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
 .import-progress { margin-top: 10px; }
 .progress-row { display: flex; align-items: center; gap: 10px; }
 .progress-bar {

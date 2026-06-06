@@ -48,6 +48,8 @@ const state = {
     offset: 0,
     limit: 50,
     poll: null,
+    lines: [],
+    allResults: [],
   },
 };
 
@@ -149,9 +151,19 @@ function shortScope(scope) {
 
 async function importRefreshToken() {
   const input = el("token-line");
+  const lines = input.value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+  startImportLines(lines);
+}
+
+function getImportConcurrency() {
+  const raw = Number.parseInt(el("import-concurrency").value, 10);
+  if (Number.isNaN(raw)) return 3;
+  return Math.min(Math.max(raw, 1), 5);
+}
+
+async function startImportLines(lines) {
   const status = el("token-import-status");
   const button = el("btn-import-token");
-  const lines = input.value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
   if (!lines.length) {
     status.textContent = "Chưa có dòng token.";
     return;
@@ -166,15 +178,21 @@ async function importRefreshToken() {
   state.importJob.id = null;
   state.importJob.status = "";
   state.importJob.offset = 0;
+  state.importJob.lines = lines;
+  state.importJob.allResults = [];
   renderImportLog([]);
   renderImportPager(null);
   renderImportProgress(null);
+  updateFailedActions();
   status.textContent = `Đang tạo job import ${lines.length} token…`;
   try {
     const job = await api("/accounts/import-refresh-token/job", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ line: lines.join("\n") }),
+      body: JSON.stringify({
+        line: lines.join("\n"),
+        concurrency: getImportConcurrency(),
+      }),
     });
     state.importJob.id = job.job_id;
     state.importJob.status = job.status;
@@ -212,6 +230,8 @@ async function pollImportJob() {
       el("btn-import-token").disabled = false;
       el("btn-cancel-import").style.display = "none";
       if (job.failed === 0 && job.status === "done") el("token-line").value = "";
+      await loadAllImportResults(job);
+      updateFailedActions();
       await loadStatus();
     }
   } catch (e) {
@@ -234,12 +254,70 @@ function renderImportJob(job) {
         ? "Đang hủy"
         : "Đang chạy";
   el("token-import-status").textContent =
-    `${doneText}: ${job.processed}/${job.total}. Thêm: ${job.added}. Lỗi: ${job.failed}.`;
+    `${doneText}: ${job.processed}/${job.total}. Thêm: ${job.added}. Lỗi: ${job.failed}. Luồng: ${job.concurrency || 1}.`;
   renderImportProgress(job);
   renderImportLog(job.results || []);
   renderImportPager(job);
   el("btn-import-token").disabled = active;
   el("btn-cancel-import").style.display = active ? "inline-block" : "none";
+}
+
+async function loadAllImportResults(job) {
+  if (!job || !job.job_id || !job.result_count) {
+    state.importJob.allResults = [];
+    return;
+  }
+  const all = [];
+  for (let offset = 0; offset < job.result_count; offset += 200) {
+    const p = new URLSearchParams();
+    p.set("offset", offset);
+    p.set("limit", 200);
+    const page = await api(`/accounts/import-jobs/${job.job_id}?${p.toString()}`);
+    all.push(...(page.results || []));
+  }
+  state.importJob.allResults = all.sort((a, b) => a.line - b.line);
+}
+
+function failedImportLines() {
+  return (state.importJob.allResults || [])
+    .filter((item) => !item.ok)
+    .map((item) => state.importJob.lines[item.line - 1])
+    .filter(Boolean);
+}
+
+function updateFailedActions() {
+  const failed = failedImportLines();
+  const show = failed.length > 0 && !["queued", "running", "cancelling"].includes(state.importJob.status);
+  el("btn-copy-failed").style.display = show ? "inline-block" : "none";
+  el("btn-retry-failed").style.display = show ? "inline-block" : "none";
+}
+
+async function copyFailedLines() {
+  const failed = failedImportLines();
+  if (!failed.length) return;
+  const text = failed.join("\n");
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
+    el("token-import-status").textContent = `Đã copy ${failed.length} dòng lỗi.`;
+  } catch (e) {
+    el("token-import-status").textContent = "Không copy được: " + e.message;
+  }
+}
+
+function retryFailedLines() {
+  const failed = failedImportLines();
+  if (!failed.length) return;
+  el("token-line").value = failed.join("\n");
+  startImportLines(failed);
 }
 
 function renderImportProgress(job) {
@@ -643,6 +721,8 @@ function closeModal() {
 el("btn-add").onclick = startLogin;
 el("btn-import-token").onclick = importRefreshToken;
 el("btn-cancel-import").onclick = cancelImportJob;
+el("btn-copy-failed").onclick = copyFailedLines;
+el("btn-retry-failed").onclick = retryFailedLines;
 el("btn-refresh").onclick = () => (state.searchMode ? doSearch() : loadInbox());
 el("btn-search").onclick = doSearch;
 el("btn-clear").onclick = clearSearch;

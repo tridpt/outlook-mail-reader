@@ -11,7 +11,8 @@ mà không phải đăng nhập lại.
 - Tìm kiếm mail theo từ khóa trên tất cả tài khoản cùng lúc
 - Đánh dấu đã đọc / chưa đọc, lọc riêng mail chưa đọc
 - Import refresh token hàng loạt kèm log lỗi theo từng dòng
-- Import queue cho danh sách lớn: progress, phân trang log, hủy job
+- Import queue cho danh sách lớn: chọn 1-5 luồng xử lý, progress, phân trang log, hủy job
+- Copy hoặc retry riêng các dòng import lỗi
 
 > 🔐 **An toàn & hợp lệ:** Dùng OAuth 2.0 chuẩn của Microsoft (Microsoft Graph).
 > **Không lưu mật khẩu.** Mỗi tài khoản vẫn phải qua màn đăng nhập Microsoft thật
@@ -86,6 +87,8 @@ File này tự tạo `.venv` nếu chưa có, cài `requirements.txt`, set
 2. Lặp lại cho từng tài khoản (mỗi cái chỉ 1 lần)
 3. Hoặc mở **Nhập refresh token** và dán một hay nhiều dòng
    `email|password|refresh_token|client_id`; app bỏ qua password và chỉ lưu token mã hóa
+   - Chọn **Luồng** 1-5 để kiểm soát tốc độ import
+   - Sau khi import xong có thể **Copy dòng lỗi** hoặc **Retry lỗi**
 4. Bấm **🔄 Tải mail** để xem hộp thư gộp của tất cả tài khoản
 5. Bấm vào một mail để xem nội dung đầy đủ; trong cửa sổ chi tiết có nút
    đánh dấu đã đọc / chưa đọc
@@ -102,7 +105,7 @@ Token mã hóa lưu tại `storage/`. Xóa thư mục này nếu muốn đăng x
 | GET | `/api/outlook/login/status/{job_id}` | Poll trạng thái đăng nhập |
 | GET | `/api/outlook/accounts` | Danh sách tài khoản |
 | POST | `/api/outlook/accounts/import-refresh-token` | Import một hoặc nhiều dòng refresh token |
-| POST | `/api/outlook/accounts/import-refresh-token/job` | Tạo import job chạy nền |
+| POST | `/api/outlook/accounts/import-refresh-token/job` | Tạo import job chạy nền (`concurrency` 1-5) |
 | GET | `/api/outlook/accounts/import-jobs/{job_id}` | Poll progress + log phân trang (`offset`, `limit`) |
 | POST | `/api/outlook/accounts/import-jobs/{job_id}/cancel` | Hủy import job |
 | POST | `/api/outlook/accounts/{id}/refresh-token` | Đổi refresh token cho tài khoản import |

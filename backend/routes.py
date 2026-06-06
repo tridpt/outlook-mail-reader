@@ -12,6 +12,7 @@ router = APIRouter(prefix="/api/outlook", tags=["outlook"])
 
 class ImportRefreshTokenRequest(BaseModel):
     line: str
+    concurrency: int = 3
 
 
 class UpdateRefreshTokenRequest(BaseModel):
@@ -89,7 +90,9 @@ def start_import_refresh_token_job(payload: ImportRefreshTokenRequest) -> dict:
             status_code=400,
             detail="Thiếu dòng import email|password|refresh_token|client_id.",
         )
-    return engine.begin_import_refresh_token_job(lines)
+    return engine.begin_import_refresh_token_job(
+        lines, concurrency=payload.concurrency
+    )
 
 
 @router.get("/accounts/import-jobs/{job_id}")
