@@ -79,12 +79,15 @@ function renderAccounts(accounts) {
     box.innerHTML = `<p class="hint">Chưa có tài khoản nào. Bấm "+ Thêm tài khoản".</p>`;
     return;
   }
-  box.innerHTML = accounts.map((a) => `
+  box.innerHTML = accounts.map((a) => {
+    const source = a.source ? `<span class="source">${escapeHtml(a.source)}</span>` : "";
+    return `
     <div class="acct-chip">
       <span>✉️</span>
-      <span class="email">${escapeHtml(a.username)}<span class="badge zero" data-badge="${a.home_account_id}"></span></span>
+      <span class="email">${escapeHtml(a.username)} ${source}<span class="badge zero" data-badge="${a.home_account_id}"></span></span>
       <button class="danger small" data-id="${a.home_account_id}">Xóa</button>
-    </div>`).join("");
+    </div>`;
+  }).join("");
   box.querySelectorAll("button.danger").forEach((b) => {
     b.onclick = async () => {
       if (!confirm("Xóa tài khoản này? (sẽ phải đăng nhập lại nếu thêm sau này)")) return;
@@ -92,6 +95,42 @@ function renderAccounts(accounts) {
       loadStatus();
     };
   });
+}
+
+async function importRefreshToken() {
+  const input = el("token-line");
+  const status = el("token-import-status");
+  const button = el("btn-import-token");
+  const lines = input.value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+  if (!lines.length) {
+    status.textContent = "Chưa có dòng token.";
+    return;
+  }
+  if (lines.length !== 1) {
+    status.textContent = "Chỉ nhập 1 dòng mỗi lần.";
+    return;
+  }
+  if (lines[0].split("|").length !== 4) {
+    status.textContent = "Sai định dạng email|password|refresh_token|client_id.";
+    return;
+  }
+  button.disabled = true;
+  status.textContent = "Đang kiểm tra token…";
+  try {
+    const data = await api("/accounts/import-refresh-token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ line: lines[0] }),
+    });
+    const account = data.account || {};
+    input.value = "";
+    status.textContent = `Đã thêm ${account.username || "tài khoản"} (${account.source || "token"}).`;
+    await loadStatus();
+  } catch (e) {
+    status.textContent = "Lỗi: " + e.message;
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function loadUnreadCounts() {
@@ -322,6 +361,7 @@ async function setRead(isRead, refresh = true) {
     if (currentMail === mail) updateToggleLabel();
     if (refresh) refreshCurrentView();
   } catch (e) {
+    if (!refresh && e.message.includes("Mail.Read")) return;
     alert("Không đổi được trạng thái: " + e.message);
   }
 }
@@ -339,6 +379,7 @@ function closeModal() {
 
 // ---------- Sự kiện ----------
 el("btn-add").onclick = startLogin;
+el("btn-import-token").onclick = importRefreshToken;
 el("btn-refresh").onclick = () => (state.searchMode ? doSearch() : loadInbox());
 el("btn-search").onclick = doSearch;
 el("btn-clear").onclick = clearSearch;

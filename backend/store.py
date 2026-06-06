@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import os
 import stat
+from typing import Any
 
 from cryptography.fernet import Fernet
 from msal import SerializableTokenCache
 
-from config import ENCRYPTION_KEY_PATH, TOKEN_CACHE_PATH
+from config import ENCRYPTION_KEY_PATH, IMPORTED_ACCOUNTS_PATH, TOKEN_CACHE_PATH
 
 
 def _load_or_create_key() -> bytes:
@@ -53,5 +54,35 @@ def save_cache(cache: SerializableTokenCache) -> None:
     TOKEN_CACHE_PATH.write_bytes(token)
     try:
         os.chmod(TOKEN_CACHE_PATH, stat.S_IRUSR | stat.S_IWUSR)
+    except (OSError, NotImplementedError):
+        pass
+
+
+def load_imported_accounts() -> dict[str, Any]:
+    """Load refresh-token imported accounts from encrypted storage."""
+    if not IMPORTED_ACCOUNTS_PATH.exists():
+        return {"version": 1, "accounts": {}}
+    try:
+        import json
+
+        fernet = Fernet(_load_or_create_key())
+        data = fernet.decrypt(IMPORTED_ACCOUNTS_PATH.read_bytes())
+        parsed = json.loads(data.decode("utf-8"))
+        if not isinstance(parsed, dict) or not isinstance(parsed.get("accounts"), dict):
+            return {"version": 1, "accounts": {}}
+        return parsed
+    except Exception:
+        return {"version": 1, "accounts": {}}
+
+
+def save_imported_accounts(data: dict[str, Any]) -> None:
+    """Encrypt and save imported refresh-token accounts."""
+    import json
+
+    fernet = Fernet(_load_or_create_key())
+    token = fernet.encrypt(json.dumps(data, ensure_ascii=False).encode("utf-8"))
+    IMPORTED_ACCOUNTS_PATH.write_bytes(token)
+    try:
+        os.chmod(IMPORTED_ACCOUNTS_PATH, stat.S_IRUSR | stat.S_IWUSR)
     except (OSError, NotImplementedError):
         pass

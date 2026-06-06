@@ -3,10 +3,15 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
+from pydantic import BaseModel
 
 from config import CLIENT_ID, DEFAULT_MAIL_COUNT
 
 router = APIRouter(prefix="/api/outlook", tags=["outlook"])
+
+
+class ImportRefreshTokenRequest(BaseModel):
+    line: str
 
 # Map tên thư mục thân thiện -> well-known folder của Graph
 FOLDER_MAP = {
@@ -23,11 +28,9 @@ FOLDER_MAP = {
 def status() -> dict:
     """Trạng thái cấu hình + số tài khoản đã đăng nhập."""
     configured = bool(CLIENT_ID)
-    accounts: list = []
-    if configured:
-        from engine import engine
+    from engine import engine
 
-        accounts = engine.list_accounts()
+    accounts = engine.list_accounts()
     return {"configured": configured, "accounts": accounts}
 
 
@@ -55,6 +58,17 @@ def accounts() -> dict:
     from engine import engine
 
     return {"accounts": engine.list_accounts()}
+
+
+@router.post("/accounts/import-refresh-token")
+def import_refresh_token(payload: ImportRefreshTokenRequest) -> dict:
+    from engine import engine
+
+    try:
+        account = engine.import_refresh_token_account(payload.line)
+        return {"ok": True, "account": account}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.delete("/accounts/{home_account_id}")

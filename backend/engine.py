@@ -8,8 +8,17 @@ Cơ chế:
 """
 from __future__ import annotations
 
+import base64
+import email.utils
+import hashlib
+import html
+import imaplib
+import re
 import threading
 import uuid
+from datetime import datetime, timedelta
+from email import policy
+from email.parser import BytesParser
 from typing import Any
 
 import msal
@@ -20,9 +29,18 @@ from config import (
     CLIENT_ID,
     DEFAULT_MAIL_COUNT,
     GRAPH_BASE,
+    IMAP_HOST,
+    IMAP_PORT,
+    IMAP_SCOPES,
     SCOPES,
+    TOKEN_ENDPOINT,
 )
-from store import load_cache, save_cache
+from store import (
+    load_cache,
+    load_imported_accounts,
+    save_cache,
+    save_imported_accounts,
+)
 
 
 class OutlookEngine:
@@ -30,6 +48,7 @@ class OutlookEngine:
 
     def __init__(self) -> None:
         self._cache = load_cache()
+        self._imported = load_imported_accounts()
         self._lock = threading.Lock()
         # Các phiên đăng nhập device-code đang chờ người dùng nhập code
         self._login_jobs: dict[str, dict[str, Any]] = {}
@@ -48,6 +67,205 @@ class OutlookEngine:
 
     def _persist(self) -> None:
         save_cache(self._cache)
+
+    def _persist_imported(self) -> None:
+        save_imported_accounts(self._imported)
+
+    @staticmethod
+    def _now_iso() -> str:
+        return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+    @staticmethod
+    def _imported_id(email_address: str, client_id: str) -> str:
+        digest = hashlib.sha256(
+            f"{email_address.lower()}|{client_id.lower()}".encode("utf-8")
+        ).hexdigest()[:20]
+        return f"imported:{digest}"
+
+    @staticmethod
+    def _public_account(account_id: str, data: dict[str, Any]) -> dict[str, str]:
+        return {
+            "home_account_id": account_id,
+            "username": data.get("username", "?"),
+            "source": data.get("mode", "imported"),
+        }
+
+    def _get_imported_account(self, home_account_id: str) -> dict[str, Any] | None:
+        return self._imported.get("accounts", {}).get(home_account_id)
+
+    @staticmethod
+    def _parse_import_line(line: str) -> dict[str, str]:
+        parts = [p.strip() for p in line.strip().split("|")]
+        if len(parts) != 4:
+            raise RuntimeError(
+                "Dòng import phải có dạng email|password|refresh_token|client_id."
+            )
+        email_address, _password, refresh_token, client_id = parts
+        if not email_address or "@" not in email_address:
+            raise RuntimeError("Email trong dòng import không hợp lệ.")
+        if not refresh_token:
+            raise RuntimeError("Thiếu refresh_token trong dòng import.")
+        if not client_id:
+            raise RuntimeError("Thiếu client_id trong dòng import.")
+        return {
+            "email": email_address,
+            "refresh_token": refresh_token,
+            "client_id": client_id,
+        }
+
+    @staticmethod
+    def _token_error(data: dict[str, Any]) -> str:
+        detail = data.get("error_description") or data.get("error") or "unknown error"
+        return str(detail).replace("\r", " ").replace("\n", " ")[:350]
+
+    @staticmethod
+    def _graph_import_scope_options() -> list[tuple[list[str], bool, str]]:
+        return [
+            (["Mail.Read", "offline_access"], False, "Mail.Read"),
+            (["Mail.ReadWrite", "offline_access"], True, "Mail.ReadWrite"),
+            (
+                ["https://graph.microsoft.com/Mail.Read", "offline_access"],
+                False,
+                "https://graph.microsoft.com/Mail.Read",
+            ),
+            (
+                ["https://graph.microsoft.com/Mail.ReadWrite", "offline_access"],
+                True,
+                "https://graph.microsoft.com/Mail.ReadWrite",
+            ),
+            (["User.Read", "Mail.Read", "offline_access"], False, "User.Read Mail.Read"),
+            (
+                ["User.Read", "Mail.ReadWrite", "offline_access"],
+                True,
+                "User.Read Mail.ReadWrite",
+            ),
+        ]
+
+    def _redeem_refresh_token(
+        self, client_id: str, refresh_token: str, scopes: list[str]
+    ) -> dict[str, Any]:
+        resp = requests.post(
+            TOKEN_ENDPOINT,
+            data={
+                "client_id": client_id,
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "scope": " ".join(scopes),
+            },
+            timeout=30,
+        )
+        try:
+            data = resp.json()
+        except ValueError:
+            data = {"error_description": resp.text[:350]}
+        if resp.status_code != 200 or "access_token" not in data:
+            raise RuntimeError(self._token_error(data))
+        return data
+
+    def _refresh_imported_access_token(
+        self, account: dict[str, Any], scopes: list[str]
+    ) -> str:
+        data = self._redeem_refresh_token(
+            account["client_id"], account["refresh_token"], scopes
+        )
+        new_refresh_token = data.get("refresh_token")
+        if new_refresh_token and new_refresh_token != account.get("refresh_token"):
+            with self._lock:
+                account["refresh_token"] = new_refresh_token
+                account["updated_at"] = self._now_iso()
+                self._persist_imported()
+        return data["access_token"]
+
+    def _try_graph_import(
+        self, parsed: dict[str, str], refresh_token: str
+    ) -> tuple[dict[str, Any], list[str], bool, str, str]:
+        errors = []
+        current_refresh_token = refresh_token
+        for scopes, can_write, label in self._graph_import_scope_options():
+            try:
+                token_data = self._redeem_refresh_token(
+                    parsed["client_id"], current_refresh_token, scopes
+                )
+                current_refresh_token = (
+                    token_data.get("refresh_token") or current_refresh_token
+                )
+                resp = requests.get(
+                    f"{GRAPH_BASE}/me/messages?$top=1&$select=id",
+                    headers={"Authorization": f"Bearer {token_data['access_token']}"},
+                    timeout=30,
+                )
+                if resp.status_code == 200:
+                    return (
+                        token_data,
+                        scopes,
+                        can_write,
+                        label,
+                        current_refresh_token,
+                    )
+                errors.append(f"{label}: Graph messages {resp.status_code}")
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{label}: {str(exc)[:140]}")
+        raise RuntimeError(" | ".join(errors[:4]))
+
+    def import_refresh_token_account(self, line: str) -> dict[str, str]:
+        """Import one user-owned Outlook account from email|password|refresh_token|client_id."""
+        parsed = self._parse_import_line(line)
+        mode = "graph"
+        name = ""
+        refresh_token = parsed["refresh_token"]
+        graph_scopes: list[str] = []
+        graph_can_write = False
+        graph_scope_label = ""
+
+        try:
+            (
+                token_data,
+                graph_scopes,
+                graph_can_write,
+                graph_scope_label,
+                refresh_token,
+            ) = self._try_graph_import(parsed, refresh_token)
+            profile = requests.get(
+                f"{GRAPH_BASE}/me?$select=displayName",
+                headers={"Authorization": f"Bearer {token_data['access_token']}"},
+                timeout=30,
+            )
+            if profile.status_code == 200:
+                name = profile.json().get("displayName") or ""
+        except Exception as graph_exc:  # noqa: BLE001
+            mode = "imap"
+            try:
+                token_data = self._redeem_refresh_token(
+                    parsed["client_id"], refresh_token, IMAP_SCOPES
+                )
+                refresh_token = token_data.get("refresh_token") or refresh_token
+                self._imap_probe(parsed["email"], token_data["access_token"])
+            except Exception as imap_exc:  # noqa: BLE001
+                raise RuntimeError(
+                    "Không dùng được refresh token này cho Graph hoặc IMAP. "
+                    f"Graph: {str(graph_exc)[:180]} | IMAP: {str(imap_exc)[:180]}"
+                ) from imap_exc
+
+        account_id = self._imported_id(parsed["email"], parsed["client_id"])
+        account = {
+            "username": parsed["email"],
+            "name": name,
+            "client_id": parsed["client_id"],
+            "refresh_token": refresh_token,
+            "mode": mode,
+            "graph_scopes": graph_scopes,
+            "graph_can_write": graph_can_write,
+            "graph_scope_label": graph_scope_label,
+            "created_at": self._now_iso(),
+            "updated_at": self._now_iso(),
+        }
+        with self._lock:
+            existing = self._imported.setdefault("accounts", {}).get(account_id)
+            if existing:
+                account["created_at"] = existing.get("created_at", account["created_at"])
+            self._imported["accounts"][account_id] = account
+            self._persist_imported()
+        return self._public_account(account_id, account)
 
     # ---------- Đăng nhập (device code flow) ----------
     def begin_login(self) -> dict[str, Any]:
@@ -108,18 +326,29 @@ class OutlookEngine:
 
     # ---------- Quản lý tài khoản ----------
     def list_accounts(self) -> list[dict[str, str]]:
-        app = self._build_app()
         out = []
-        for a in app.get_accounts():
-            out.append(
-                {
-                    "home_account_id": a["home_account_id"],
-                    "username": a.get("username", "?"),
-                }
-            )
+        if CLIENT_ID:
+            app = self._build_app()
+            for a in app.get_accounts():
+                out.append(
+                    {
+                        "home_account_id": a["home_account_id"],
+                        "username": a.get("username", "?"),
+                        "source": "graph",
+                    }
+                )
+        for account_id, data in self._imported.get("accounts", {}).items():
+            out.append(self._public_account(account_id, data))
         return out
 
     def remove_account(self, home_account_id: str) -> bool:
+        if home_account_id in self._imported.get("accounts", {}):
+            with self._lock:
+                self._imported["accounts"].pop(home_account_id, None)
+                self._persist_imported()
+            return True
+        if not CLIENT_ID:
+            return False
         app = self._build_app()
         target = next(
             (a for a in app.get_accounts() if a["home_account_id"] == home_account_id),
@@ -133,6 +362,14 @@ class OutlookEngine:
 
     # ---------- Lấy token (tự refresh) ----------
     def _token_for(self, home_account_id: str) -> str:
+        imported = self._get_imported_account(home_account_id)
+        if imported:
+            if imported.get("mode") != "graph":
+                raise RuntimeError("Tài khoản này dùng IMAP, không có Graph token.")
+            scopes = imported.get("graph_scopes") or ["Mail.Read", "offline_access"]
+            return self._refresh_imported_access_token(imported, scopes)
+        if not CLIENT_ID:
+            raise RuntimeError("Chưa cấu hình OUTLOOK_CLIENT_ID.")
         app = self._build_app()
         account = next(
             (a for a in app.get_accounts() if a["home_account_id"] == home_account_id),
@@ -150,8 +387,417 @@ class OutlookEngine:
         return result["access_token"]
 
     # ---------- Thư mục ----------
+    # ---------- Imported IMAP accounts ----------
+    def _imap_account(self, home_account_id: str) -> dict[str, Any] | None:
+        account = self._get_imported_account(home_account_id)
+        if account and account.get("mode") == "imap":
+            return account
+        return None
+
+    @staticmethod
+    def _imap_authenticate(mail: imaplib.IMAP4_SSL, username: str, token: str) -> None:
+        auth = f"user={username}\x01auth=Bearer {token}\x01\x01".encode("utf-8")
+        mail.authenticate("XOAUTH2", lambda _challenge: auth)
+
+    def _imap_probe(self, username: str, access_token: str) -> None:
+        mail = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
+        try:
+            self._imap_authenticate(mail, username, access_token)
+            status, _ = mail.select("INBOX", readonly=True)
+            if status != "OK":
+                raise RuntimeError("Không mở được INBOX qua IMAP.")
+        finally:
+            self._imap_logout(mail)
+
+    def _imap_connect(self, account: dict[str, Any]) -> imaplib.IMAP4_SSL:
+        token = self._refresh_imported_access_token(account, IMAP_SCOPES)
+        mail = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
+        self._imap_authenticate(mail, account["username"], token)
+        return mail
+
+    @staticmethod
+    def _imap_logout(mail: imaplib.IMAP4_SSL) -> None:
+        try:
+            mail.logout()
+        except Exception:  # noqa: BLE001
+            pass
+
+    @staticmethod
+    def _imap_mailbox_arg(name: str) -> str:
+        if name.upper() == "INBOX":
+            return "INBOX"
+        escaped = name.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+
+    @staticmethod
+    def _imap_folder_candidates(folder: str | None) -> list[str]:
+        mapping = {
+            "inbox": ["INBOX"],
+            "sentitems": ["Sent", "Sent Items"],
+            "drafts": ["Drafts"],
+            "junkemail": ["Junk", "Junk Email"],
+            "deleteditems": ["Deleted", "Deleted Items", "Trash"],
+            "archive": ["Archive"],
+        }
+        return mapping.get((folder or "inbox").lower(), [folder or "INBOX"])
+
+    def _imap_select(
+        self, mail: imaplib.IMAP4_SSL, folder: str | None, readonly: bool = True
+    ) -> str:
+        errors = []
+        for candidate in self._imap_folder_candidates(folder):
+            status, data = mail.select(
+                self._imap_mailbox_arg(candidate), readonly=readonly
+            )
+            if status == "OK":
+                return candidate
+            errors.append(f"{candidate}: {data!r}")
+        raise RuntimeError("Không mở được thư mục IMAP: " + "; ".join(errors[:3]))
+
+    @staticmethod
+    def _encode_imap_id(folder: str, uid: bytes | str) -> str:
+        uid_text = uid.decode("ascii", errors="ignore") if isinstance(uid, bytes) else uid
+        folder_token = base64.urlsafe_b64encode(folder.encode("utf-8")).decode("ascii")
+        return f"imap:{folder_token.rstrip('=')}:{uid_text}"
+
+    @staticmethod
+    def _decode_imap_id(message_id: str) -> tuple[str, str]:
+        if not message_id.startswith("imap:"):
+            return "INBOX", message_id
+        try:
+            _prefix, folder_token, uid = message_id.split(":", 2)
+            padding = "=" * (-len(folder_token) % 4)
+            folder = base64.urlsafe_b64decode(folder_token + padding).decode("utf-8")
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError("Mã mail IMAP không hợp lệ.") from exc
+        if not re.fullmatch(r"\d+", uid):
+            raise RuntimeError("UID mail IMAP không hợp lệ.")
+        return folder, uid
+
+    @staticmethod
+    def _part_text(part: Any) -> str:
+        try:
+            content = part.get_content()
+            return content if isinstance(content, str) else str(content)
+        except Exception:  # noqa: BLE001
+            payload = part.get_payload(decode=True) or b""
+            charset = part.get_content_charset() or "utf-8"
+            return payload.decode(charset, errors="replace")
+
+    def _extract_body(self, msg: Any) -> tuple[str, str]:
+        plain = ""
+        html_body = ""
+        if msg.is_multipart():
+            for part in msg.walk():
+                if part.is_multipart():
+                    continue
+                ctype = part.get_content_type()
+                disposition = (part.get_content_disposition() or "").lower()
+                if disposition == "attachment":
+                    continue
+                if ctype == "text/html" and not html_body:
+                    html_body = self._part_text(part)
+                elif ctype == "text/plain" and not plain:
+                    plain = self._part_text(part)
+        else:
+            ctype = msg.get_content_type()
+            if ctype == "text/html":
+                html_body = self._part_text(msg)
+            else:
+                plain = self._part_text(msg)
+        if html_body:
+            return "html", html_body
+        return "text", plain
+
+    @staticmethod
+    def _preview_from_body(body_type: str, body: str) -> str:
+        text = re.sub(r"<[^>]+>", " ", body) if body_type == "html" else body
+        text = html.unescape(re.sub(r"\s+", " ", text)).strip()
+        return text[:300]
+
+    @staticmethod
+    def _attachment_parts(msg: Any) -> list[tuple[int, Any]]:
+        out = []
+        idx = 0
+        for part in msg.walk():
+            if part.is_multipart():
+                continue
+            disposition = (part.get_content_disposition() or "").lower()
+            filename = part.get_filename()
+            if filename or disposition in {"attachment", "inline"}:
+                out.append((idx, part))
+            idx += 1
+        return out
+
+    def _imap_fetch_raw(
+        self, mail: imaplib.IMAP4_SSL, uid: bytes | str
+    ) -> tuple[bytes, str]:
+        uid_text = uid.decode("ascii", errors="ignore") if isinstance(uid, bytes) else uid
+        status, data = mail.uid("fetch", uid_text, "(RFC822 FLAGS)")
+        if status != "OK":
+            raise RuntimeError(f"IMAP FETCH lỗi: {data!r}")
+        raw = None
+        fetch_header = ""
+        for item in data:
+            if isinstance(item, tuple):
+                fetch_header = item[0].decode("utf-8", errors="replace")
+                raw = item[1]
+                break
+        if raw is None:
+            raise RuntimeError("Không đọc được nội dung mail từ IMAP.")
+        return raw, fetch_header
+
+    def _imap_summary(
+        self, uid: bytes | str, raw: bytes, fetch_header: str, folder: str
+    ) -> dict[str, Any]:
+        msg = BytesParser(policy=policy.default).parsebytes(raw)
+        sender_name, sender_addr = email.utils.parseaddr(str(msg.get("from", "")))
+        body_type, body = self._extract_body(msg)
+        received = ""
+        try:
+            parsed_date = email.utils.parsedate_to_datetime(str(msg.get("date", "")))
+            if parsed_date:
+                received = parsed_date.isoformat()
+        except Exception:  # noqa: BLE001
+            received = ""
+        return {
+            "id": self._encode_imap_id(folder, uid),
+            "subject": str(msg.get("subject") or "(không tiêu đề)"),
+            "from_name": sender_name,
+            "from_address": sender_addr,
+            "received": received,
+            "preview": self._preview_from_body(body_type, body),
+            "is_read": "\\Seen" in fetch_header,
+            "has_attachments": bool(self._attachment_parts(msg)),
+            "web_link": "",
+        }
+
+    @staticmethod
+    def _imap_quote(value: str) -> str:
+        return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    @staticmethod
+    def _imap_date(value: str, add_days: int = 0) -> str:
+        d = datetime.strptime(value, "%Y-%m-%d") + timedelta(days=add_days)
+        return d.strftime("%d-%b-%Y")
+
+    def _imap_search_uids(
+        self,
+        mail: imaplib.IMAP4_SSL,
+        unread_only: bool = False,
+        sender: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        text: str | None = None,
+    ) -> list[bytes]:
+        criteria = ["ALL"]
+        if unread_only:
+            criteria.append("UNSEEN")
+        if sender:
+            criteria.extend(["FROM", self._imap_quote(sender)])
+        if date_from:
+            criteria.extend(["SINCE", self._imap_date(date_from)])
+        if date_to:
+            criteria.extend(["BEFORE", self._imap_date(date_to, add_days=1)])
+        if text:
+            criteria.extend(["TEXT", self._imap_quote(text)])
+        status, data = mail.uid("search", None, *criteria)
+        if status != "OK":
+            raise RuntimeError(f"IMAP SEARCH lỗi: {data!r}")
+        return data[0].split() if data and data[0] else []
+
+    def _imap_get_messages(
+        self,
+        account: dict[str, Any],
+        count: int,
+        skip: int,
+        folder: str | None,
+        unread_only: bool,
+        has_attachments: bool,
+        sender: str | None,
+        date_from: str | None,
+        date_to: str | None,
+    ) -> dict[str, Any]:
+        mail = self._imap_connect(account)
+        try:
+            selected_folder = self._imap_select(mail, folder, readonly=True)
+            uids = list(
+                reversed(
+                    self._imap_search_uids(
+                        mail, unread_only, sender, date_from, date_to
+                    )
+                )
+            )
+            messages = []
+            consumed = 0
+            fetch_limit = max(count * (8 if has_attachments else 1), count)
+            for uid in uids[skip:]:
+                if consumed >= fetch_limit and len(messages) < count:
+                    break
+                consumed += 1
+                raw, fetch_header = self._imap_fetch_raw(mail, uid)
+                summary = self._imap_summary(uid, raw, fetch_header, selected_folder)
+                if has_attachments and not summary["has_attachments"]:
+                    continue
+                messages.append(summary)
+                if len(messages) >= count:
+                    break
+            return {"messages": messages, "has_more": skip + consumed < len(uids)}
+        finally:
+            self._imap_logout(mail)
+
+    def _imap_list_folders(self, account: dict[str, Any]) -> list[dict[str, Any]]:
+        mail = self._imap_connect(account)
+        try:
+            status, data = mail.list()
+            if status != "OK":
+                raise RuntimeError(f"IMAP LIST lỗi: {data!r}")
+            folders = []
+            for row in data or []:
+                text = row.decode("utf-8", errors="replace")
+                match = re.search(r'"([^"]+)"\s*$', text)
+                name = match.group(1) if match else text.rsplit(" ", 1)[-1]
+                folders.append({"id": name, "name": name, "unread": 0, "total": 0})
+            return folders
+        finally:
+            self._imap_logout(mail)
+
+    def _imap_unread_count(self, account: dict[str, Any]) -> int:
+        mail = self._imap_connect(account)
+        try:
+            self._imap_select(mail, "inbox", readonly=True)
+            return len(self._imap_search_uids(mail, unread_only=True))
+        finally:
+            self._imap_logout(mail)
+
+    def _imap_message_detail(
+        self, account: dict[str, Any], message_id: str
+    ) -> dict[str, Any]:
+        folder, uid = self._decode_imap_id(message_id)
+        mail = self._imap_connect(account)
+        try:
+            selected_folder = self._imap_select(mail, folder, readonly=True)
+            raw, fetch_header = self._imap_fetch_raw(mail, uid)
+            msg = BytesParser(policy=policy.default).parsebytes(raw)
+            sender_name, sender_addr = email.utils.parseaddr(str(msg.get("from", "")))
+            body_type, body = self._extract_body(msg)
+
+            def _addresses(header: str) -> list[str]:
+                return [
+                    name or addr
+                    for name, addr in email.utils.getaddresses(
+                        [str(msg.get(header, ""))]
+                    )
+                    if name or addr
+                ]
+
+            received = ""
+            try:
+                parsed_date = email.utils.parsedate_to_datetime(
+                    str(msg.get("date", ""))
+                )
+                if parsed_date:
+                    received = parsed_date.isoformat()
+            except Exception:  # noqa: BLE001
+                received = ""
+            return {
+                "id": self._encode_imap_id(selected_folder, uid),
+                "subject": str(msg.get("subject") or "(không tiêu đề)"),
+                "from_name": sender_name,
+                "from_address": sender_addr,
+                "to": _addresses("to"),
+                "cc": _addresses("cc"),
+                "received": received,
+                "body_type": body_type,
+                "body": body,
+                "is_read": "\\Seen" in fetch_header,
+                "has_attachments": bool(self._attachment_parts(msg)),
+                "web_link": "",
+            }
+        finally:
+            self._imap_logout(mail)
+
+    def _imap_list_attachments(
+        self, account: dict[str, Any], message_id: str
+    ) -> list[dict[str, Any]]:
+        folder, uid = self._decode_imap_id(message_id)
+        mail = self._imap_connect(account)
+        try:
+            self._imap_select(mail, folder, readonly=True)
+            raw, _ = self._imap_fetch_raw(mail, uid)
+            msg = BytesParser(policy=policy.default).parsebytes(raw)
+            out = []
+            for idx, part in self._attachment_parts(msg):
+                payload = part.get_payload(decode=True) or b""
+                out.append(
+                    {
+                        "id": str(idx),
+                        "name": part.get_filename() or f"attachment-{idx}",
+                        "content_type": part.get_content_type(),
+                        "size": len(payload),
+                        "is_inline": (part.get_content_disposition() or "").lower()
+                        == "inline",
+                    }
+                )
+            return out
+        finally:
+            self._imap_logout(mail)
+
+    def _imap_get_attachment(
+        self, account: dict[str, Any], message_id: str, attachment_id: str
+    ) -> dict[str, Any]:
+        folder, uid = self._decode_imap_id(message_id)
+        mail = self._imap_connect(account)
+        try:
+            self._imap_select(mail, folder, readonly=True)
+            raw, _ = self._imap_fetch_raw(mail, uid)
+            msg = BytesParser(policy=policy.default).parsebytes(raw)
+            for idx, part in self._attachment_parts(msg):
+                if str(idx) == attachment_id:
+                    return {
+                        "name": part.get_filename() or f"attachment-{idx}",
+                        "content_type": part.get_content_type(),
+                        "bytes": part.get_payload(decode=True) or b"",
+                    }
+            raise RuntimeError("Không tìm thấy file đính kèm.")
+        finally:
+            self._imap_logout(mail)
+
+    def _imap_mark_read(
+        self, account: dict[str, Any], message_id: str, is_read: bool
+    ) -> bool:
+        folder, uid = self._decode_imap_id(message_id)
+        mail = self._imap_connect(account)
+        try:
+            self._imap_select(mail, folder, readonly=False)
+            flag_op = "+FLAGS" if is_read else "-FLAGS"
+            status, data = mail.uid("store", uid, flag_op, "(\\Seen)")
+            if status != "OK":
+                raise RuntimeError(f"IMAP STORE lỗi: {data!r}")
+            return True
+        finally:
+            self._imap_logout(mail)
+
+    def _imap_search_messages(
+        self, account: dict[str, Any], query: str, count: int
+    ) -> list[dict[str, Any]]:
+        mail = self._imap_connect(account)
+        try:
+            selected_folder = self._imap_select(mail, "inbox", readonly=True)
+            uids = list(reversed(self._imap_search_uids(mail, text=query)))
+            out = []
+            for uid in uids[:count]:
+                raw, fetch_header = self._imap_fetch_raw(mail, uid)
+                out.append(self._imap_summary(uid, raw, fetch_header, selected_folder))
+            return out
+        finally:
+            self._imap_logout(mail)
+
     def list_folders(self, home_account_id: str) -> list[dict[str, Any]]:
         """Danh sách thư mục mail + số mail chưa đọc của mỗi thư mục."""
+        imap_account = self._imap_account(home_account_id)
+        if imap_account:
+            return self._imap_list_folders(imap_account)
         token = self._token_for(home_account_id)
         url = (
             f"{GRAPH_BASE}/me/mailFolders"
@@ -174,6 +820,9 @@ class OutlookEngine:
 
     def inbox_unread_count(self, home_account_id: str) -> int:
         """Số mail chưa đọc trong Inbox của 1 tài khoản (cho badge)."""
+        imap_account = self._imap_account(home_account_id)
+        if imap_account:
+            return self._imap_unread_count(imap_account)
         token = self._token_for(home_account_id)
         resp = requests.get(
             f"{GRAPH_BASE}/me/mailFolders/inbox?$select=unreadItemCount",
@@ -234,6 +883,19 @@ class OutlookEngine:
         Lọc theo người gửi (`sender`) làm phía client trên trang đã tải vì
         Graph $filter không hỗ trợ tìm gần đúng địa chỉ người gửi.
         """
+        imap_account = self._imap_account(home_account_id)
+        if imap_account:
+            return self._imap_get_messages(
+                imap_account,
+                count=count,
+                skip=skip,
+                folder=folder,
+                unread_only=unread_only,
+                has_attachments=has_attachments,
+                sender=sender,
+                date_from=date_from,
+                date_to=date_to,
+            )
         token = self._token_for(home_account_id)
         base = (
             f"{GRAPH_BASE}/me/mailFolders/{folder}/messages"
@@ -293,6 +955,9 @@ class OutlookEngine:
         self, home_account_id: str, message_id: str
     ) -> dict[str, Any]:
         """Lấy nội dung đầy đủ của 1 mail (kèm body HTML/text)."""
+        imap_account = self._imap_account(home_account_id)
+        if imap_account:
+            return self._imap_message_detail(imap_account, message_id)
         token = self._token_for(home_account_id)
         url = (
             f"{GRAPH_BASE}/me/messages/{message_id}"
@@ -337,6 +1002,9 @@ class OutlookEngine:
         self, home_account_id: str, message_id: str
     ) -> list[dict[str, Any]]:
         """Danh sách file đính kèm của 1 mail (không tải nội dung)."""
+        imap_account = self._imap_account(home_account_id)
+        if imap_account:
+            return self._imap_list_attachments(imap_account, message_id)
         token = self._token_for(home_account_id)
         url = (
             f"{GRAPH_BASE}/me/messages/{message_id}/attachments"
@@ -366,6 +1034,9 @@ class OutlookEngine:
         """Tải nội dung 1 file đính kèm. Trả về {name, content_type, bytes}."""
         import base64
 
+        imap_account = self._imap_account(home_account_id)
+        if imap_account:
+            return self._imap_get_attachment(imap_account, message_id, attachment_id)
         token = self._token_for(home_account_id)
         url = f"{GRAPH_BASE}/me/messages/{message_id}/attachments/{attachment_id}"
         resp = requests.get(
@@ -389,6 +1060,16 @@ class OutlookEngine:
         self, home_account_id: str, message_id: str, is_read: bool = True
     ) -> bool:
         """Đánh dấu mail đã đọc / chưa đọc (cần quyền Mail.ReadWrite)."""
+        imap_account = self._imap_account(home_account_id)
+        if imap_account:
+            return self._imap_mark_read(imap_account, message_id, is_read)
+        imported = self._get_imported_account(home_account_id)
+        if imported and imported.get("mode") == "graph" and not imported.get(
+            "graph_can_write", True
+        ):
+            raise RuntimeError(
+                "Refresh token này chỉ có quyền Mail.Read; cần Mail.ReadWrite để đánh dấu đã đọc/chưa đọc."
+            )
         token = self._token_for(home_account_id)
         resp = requests.patch(
             f"{GRAPH_BASE}/me/messages/{message_id}",
@@ -428,6 +1109,9 @@ class OutlookEngine:
     def _search_one(
         self, home_account_id: str, query: str, count: int
     ) -> list[dict[str, Any]]:
+        imap_account = self._imap_account(home_account_id)
+        if imap_account:
+            return self._imap_search_messages(imap_account, query, count)
         token = self._token_for(home_account_id)
         # $search dùng để tìm full-text; không kết hợp được $orderby.
         from urllib.parse import quote
