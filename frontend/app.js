@@ -40,6 +40,8 @@ const state = {
   loaded: {},       // accId -> [messages]
   pages: {},        // accId -> số trang đã tải (để tính $skip server)
   hasMore: {},      // accId -> bool
+  accounts: [],
+  tokenUpdateAccountId: null,
 };
 
 function filterParams() {
@@ -61,6 +63,7 @@ function filterParams() {
 async function loadStatus() {
   const s = await api("/status");
   el("not-configured").style.display = s.configured ? "none" : "block";
+  state.accounts = s.accounts || [];
   renderAccounts(s.accounts || []);
   if (s.accounts && s.accounts.length) loadUnreadCounts();
   return s;
@@ -79,15 +82,24 @@ function renderAccounts(accounts) {
     box.innerHTML = `<p class="hint">Chưa có tài khoản nào. Bấm "+ Thêm tài khoản".</p>`;
     return;
   }
-  box.innerHTML = accounts.map((a) => {
-    const source = a.source ? `<span class="source">${escapeHtml(a.source)}</span>` : "";
-    return `
-    <div class="acct-chip">
-      <span>✉️</span>
-      <span class="email">${escapeHtml(a.username)} ${source}<span class="badge zero" data-badge="${a.home_account_id}"></span></span>
-      <button class="danger small" data-id="${a.home_account_id}">Xóa</button>
+  box.innerHTML = `
+    <div class="account-table-wrap">
+      <table class="account-table">
+        <thead>
+          <tr>
+            <th>Email</th>
+            <th>Nguồn</th>
+            <th>Scope</th>
+            <th>Cập nhật</th>
+            <th>Chưa đọc</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${accounts.map((a) => accountRowHtml(a)).join("")}
+        </tbody>
+      </table>
     </div>`;
-  }).join("");
   box.querySelectorAll("button.danger").forEach((b) => {
     b.onclick = async () => {
       if (!confirm("Xóa tài khoản này? (sẽ phải đăng nhập lại nếu thêm sau này)")) return;
@@ -95,6 +107,37 @@ function renderAccounts(accounts) {
       loadStatus();
     };
   });
+  box.querySelectorAll("[data-update-token]").forEach((b) => {
+    b.onclick = () => openTokenModal(b.dataset.updateToken);
+  });
+}
+
+function accountRowHtml(a) {
+  const id = escapeHtml(a.home_account_id);
+  const source = a.source ? `<span class="source">${escapeHtml(a.source)}</span>` : "";
+  const scope = a.scope ? `<span class="scope">${escapeHtml(shortScope(a.scope))}</span>` : "—";
+  const updated = a.updated_at ? fmtDate(a.updated_at) : "—";
+  const updateButton = a.can_update_token
+    ? `<button class="btn small" data-update-token="${id}">Đổi token</button>`
+    : `<button class="btn small" disabled>Đổi token</button>`;
+  return `
+    <tr>
+      <td class="account-email">${escapeHtml(a.username)}</td>
+      <td>${source}</td>
+      <td>${scope}</td>
+      <td>${escapeHtml(updated)}</td>
+      <td><span class="badge zero" data-badge="${id}"></span></td>
+      <td class="account-actions">
+        ${updateButton}
+        <button class="danger small" data-id="${id}">Xóa</button>
+      </td>
+    </tr>`;
+}
+
+function shortScope(scope) {
+  return (scope || "")
+    .replaceAll("https://graph.microsoft.com/", "")
+    .replaceAll("https://outlook.office.com/", "");
 }
 
 async function importRefreshToken() {
@@ -127,9 +170,106 @@ async function importRefreshToken() {
       ? ` Lỗi dòng ${failedItems[0].line}: ${failedItems[0].error}`
       : "";
     status.textContent = `Đã thêm ${added}/${lines.length} tài khoản. Lỗi: ${failed}.${firstError}`;
+    renderImportLog(data.results || []);
     await loadStatus();
   } catch (e) {
     status.textContent = "Lỗi: " + e.message;
+    renderImportLog([]);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderImportLog(results) {
+  const box = el("import-log");
+  if (!results || !results.length) {
+    box.style.display = "none";
+    box.innerHTML = "";
+    return;
+  }
+  const details = document.querySelector(".token-import");
+  if (details) details.open = true;
+  box.style.display = "block";
+  box.innerHTML = `
+    <div class="import-log-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Dòng</th>
+            <th>Email</th>
+            <th>Kết quả</th>
+            <th>Chi tiết</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${results.map((item) => `
+            <tr class="${item.ok ? "ok" : "fail"}">
+              <td>${item.line}</td>
+              <td>${escapeHtml(item.email || item.account?.username || "")}</td>
+              <td>${item.ok ? "OK" : "Lỗi"}</td>
+              <td>${item.ok
+                ? `${escapeHtml(item.source || item.account?.source || "")} ${escapeHtml(shortScope(item.scope || item.account?.scope || ""))}`
+                : escapeHtml(item.error || "")}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function openTokenModal(accountId) {
+  const account = state.accounts.find((a) => a.home_account_id === accountId);
+  if (!account || !account.can_update_token) return;
+  state.tokenUpdateAccountId = accountId;
+  el("token-account").textContent = `${account.username} · ${account.source || ""} · ${shortScope(account.scope || "")}`;
+  el("token-update-value").value = "";
+  el("token-update-status").textContent = "";
+  el("token-modal").style.display = "flex";
+  setTimeout(() => el("token-update-value").focus(), 0);
+}
+
+function closeTokenModal() {
+  el("token-modal").style.display = "none";
+  state.tokenUpdateAccountId = null;
+}
+
+async function saveTokenUpdate() {
+  const accountId = state.tokenUpdateAccountId;
+  const value = el("token-update-value").value.trim();
+  const status = el("token-update-status");
+  const button = el("token-save");
+  if (!accountId) return;
+  if (!value) {
+    status.textContent = "Chưa nhập refresh_token mới.";
+    return;
+  }
+  button.disabled = true;
+  status.textContent = "Đang kiểm tra token mới…";
+  try {
+    const data = await api(`/accounts/${encodeURIComponent(accountId)}/refresh-token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: value }),
+    });
+    const account = data.account || {};
+    status.textContent = `Đã cập nhật ${account.username || "tài khoản"} (${account.source || "token"} ${shortScope(account.scope || "")}).`;
+    renderImportLog([{
+      line: 1,
+      email: account.username,
+      ok: true,
+      source: account.source,
+      scope: account.scope,
+      account,
+    }]);
+    await loadStatus();
+    setTimeout(closeTokenModal, 900);
+  } catch (e) {
+    status.textContent = "Lỗi: " + e.message;
+    renderImportLog([{
+      line: 1,
+      email: state.accounts.find((a) => a.home_account_id === accountId)?.username || "",
+      ok: false,
+      error: e.message,
+    }]);
   } finally {
     button.disabled = false;
   }
@@ -411,5 +551,8 @@ el("folder-tabs").querySelectorAll(".ftab").forEach((b) => {
 el("m-close").onclick = closeModal;
 el("m-toggle-read").onclick = () => { if (currentMail) setRead(!currentMail.is_read); };
 el("modal").addEventListener("click", (e) => { if (e.target.id === "modal") closeModal(); });
+el("token-close").onclick = closeTokenModal;
+el("token-save").onclick = saveTokenUpdate;
+el("token-modal").addEventListener("click", (e) => { if (e.target.id === "token-modal") closeTokenModal(); });
 
 loadStatus();

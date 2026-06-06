@@ -83,11 +83,24 @@ class OutlookEngine:
         return f"imported:{digest}"
 
     @staticmethod
-    def _public_account(account_id: str, data: dict[str, Any]) -> dict[str, str]:
+    def _public_account(account_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        mode = data.get("mode", "imported")
+        if mode == "graph":
+            scope = data.get("graph_scope_label") or (
+                "Mail.ReadWrite" if data.get("graph_can_write") else "Mail.Read"
+            )
+        elif mode == "imap":
+            scope = "IMAP.AccessAsUser.All"
+        else:
+            scope = ""
         return {
             "home_account_id": account_id,
             "username": data.get("username", "?"),
-            "source": data.get("mode", "imported"),
+            "source": mode,
+            "scope": scope,
+            "updated_at": data.get("updated_at", ""),
+            "can_update_token": True,
+            "can_write": bool(data.get("graph_can_write", mode == "imap")),
         }
 
     def _get_imported_account(self, home_account_id: str) -> dict[str, Any] | None:
@@ -267,6 +280,23 @@ class OutlookEngine:
             self._persist_imported()
         return self._public_account(account_id, account)
 
+    def update_imported_refresh_token(
+        self, home_account_id: str, refresh_token: str
+    ) -> dict[str, Any]:
+        account = self._get_imported_account(home_account_id)
+        if not account:
+            raise RuntimeError(
+                "Chỉ đổi token trực tiếp cho tài khoản import. Tài khoản đăng nhập Microsoft cần xóa rồi đăng nhập lại."
+            )
+        refresh_token = refresh_token.strip()
+        if not refresh_token:
+            raise RuntimeError("Thiếu refresh_token mới.")
+        line = (
+            f"{account.get('username', '')}||{refresh_token}|"
+            f"{account.get('client_id', '')}"
+        )
+        return self.import_refresh_token_account(line)
+
     # ---------- Đăng nhập (device code flow) ----------
     def begin_login(self) -> dict[str, Any]:
         """Khởi tạo phiên đăng nhập, trả về code + link để người dùng nhập.
@@ -335,6 +365,10 @@ class OutlookEngine:
                         "home_account_id": a["home_account_id"],
                         "username": a.get("username", "?"),
                         "source": "graph",
+                        "scope": ", ".join(SCOPES),
+                        "updated_at": "",
+                        "can_update_token": False,
+                        "can_write": True,
                     }
                 )
         for account_id, data in self._imported.get("accounts", {}).items():

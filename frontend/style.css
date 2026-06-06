@@ -57,12 +57,36 @@ code {
   font-size: .85em;
 }
 
-.acct-chip {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 14px; background: #262a3a;
-  border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px;
+.account-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
 }
-.acct-chip .email { flex: 1; font-size: .9rem; }
+.account-table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  background: #171a25;
+}
+.account-table th,
+.account-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+  font-size: .84rem;
+}
+.account-table th { color: var(--muted); font-weight: 600; background: #10131c; }
+.account-table tr:last-child td { border-bottom: 0; }
+.account-email { max-width: 230px; overflow-wrap: anywhere; }
+.account-actions {
+  white-space: nowrap;
+  text-align: right;
+}
+.account-actions > * {
+  margin-left: 8px;
+}
 .source {
   color: var(--muted);
   border: 1px solid var(--border);
@@ -70,6 +94,15 @@ code {
   padding: 1px 6px;
   font-size: .68rem;
   text-transform: uppercase;
+}
+.scope {
+  color: var(--text);
+  background: #10131c;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: .72rem;
+  white-space: nowrap;
 }
 
 .mail-item {
@@ -111,6 +144,31 @@ code {
   font-size: .82rem;
   overflow-wrap: anywhere;
 }
+.import-log { margin-top: 12px; }
+.import-log-table {
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.import-log table {
+  width: 100%;
+  min-width: 620px;
+  border-collapse: collapse;
+  background: #10131c;
+}
+.import-log th,
+.import-log td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+  font-size: .78rem;
+}
+.import-log th { color: var(--muted); font-weight: 600; }
+.import-log tr:last-child td { border-bottom: 0; }
+.import-log .ok td:nth-child(3) { color: var(--accent-2); font-weight: 700; }
+.import-log .fail td:nth-child(3) { color: #ff7a7a; font-weight: 700; }
 .group-head { margin: 18px 0 10px; color: var(--accent-2); font-weight: 600; }
 .small { font-size: .8rem; }
 .danger { color: #ff7a7a; cursor: pointer; background: none; border: none; }
@@ -129,6 +187,20 @@ code {
   background: var(--card); border: 1px solid var(--border); border-radius: 14px;
   padding: 20px; width: 100%; max-width: 720px; max-height: 88vh;
   display: flex; flex-direction: column;
+}
+.token-modal-box { max-width: 620px; }
+#token-update-value {
+  width: 100%;
+  margin-top: 8px;
+  resize: vertical;
+  padding: 10px 12px;
+  background: #10131c;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: .82rem;
+  overflow-wrap: anywhere;
 }
 .mail-body-frame {
   flex: 1; min-height: 320px; width: 100%; border: 1px solid var(--border);

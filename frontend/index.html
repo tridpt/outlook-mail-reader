@@ -38,6 +38,7 @@
           <button class="btn small" id="btn-import-token">Nhập token</button>
           <span class="hint" id="token-import-status">Có thể nhập nhiều dòng. Password sẽ bị bỏ qua, không lưu.</span>
         </div>
+        <div id="import-log" class="import-log" style="display:none;"></div>
       </details>
     </div>
 
@@ -99,6 +100,22 @@
 
       <div id="inbox" style="margin-top:14px;">
         <p class="hint">Thêm tài khoản rồi bấm "Tải lại" để xem.</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="token-modal" class="modal" style="display:none;">
+    <div class="modal-box token-modal-box">
+      <div class="row between">
+        <h2 style="margin:0;">Đổi refresh token</h2>
+        <button class="btn" id="token-close">✕</button>
+      </div>
+      <p class="mail-meta" id="token-account"></p>
+      <textarea id="token-update-value" rows="4" spellcheck="false"
+        placeholder="refresh_token mới"></textarea>
+      <div class="row" style="gap:8px; margin-top:10px; flex-wrap:wrap;">
+        <button class="btn primary" id="token-save">Lưu token</button>
+        <span class="hint" id="token-update-status"></span>
       </div>
     </div>
   </div>

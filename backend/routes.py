@@ -13,6 +13,15 @@ router = APIRouter(prefix="/api/outlook", tags=["outlook"])
 class ImportRefreshTokenRequest(BaseModel):
     line: str
 
+
+class UpdateRefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+
+def _line_email(line: str) -> str:
+    return line.split("|", 1)[0].strip()
+
+
 # Map tên thư mục thân thiện -> well-known folder của Graph
 FOLDER_MAP = {
     "inbox": "inbox",
@@ -73,16 +82,24 @@ def import_refresh_token(payload: ImportRefreshTokenRequest) -> dict:
 
     results = []
     for idx, line in enumerate(lines, start=1):
+        email = _line_email(line)
         try:
             account = engine.import_refresh_token_account(line)
-            results.append({"line": idx, "ok": True, "account": account})
+            results.append(
+                {
+                    "line": idx,
+                    "email": account.get("username") or email,
+                    "ok": True,
+                    "source": account.get("source", ""),
+                    "scope": account.get("scope", ""),
+                    "account": account,
+                }
+            )
         except RuntimeError as exc:
-            results.append({"line": idx, "ok": False, "error": str(exc)})
+            results.append({"line": idx, "email": email, "ok": False, "error": str(exc)})
 
     added = sum(1 for item in results if item["ok"])
     failed = len(results) - added
-    if len(lines) == 1 and failed:
-        raise HTTPException(status_code=400, detail=results[0]["error"])
 
     return {
         "ok": failed == 0,
@@ -91,6 +108,21 @@ def import_refresh_token(payload: ImportRefreshTokenRequest) -> dict:
         "results": results,
         "account": results[0].get("account") if len(results) == 1 and added else None,
     }
+
+
+@router.post("/accounts/{home_account_id}/refresh-token")
+def update_refresh_token(
+    home_account_id: str, payload: UpdateRefreshTokenRequest
+) -> dict:
+    from engine import engine
+
+    try:
+        account = engine.update_imported_refresh_token(
+            home_account_id, payload.refresh_token
+        )
+        return {"ok": True, "account": account}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.delete("/accounts/{home_account_id}")

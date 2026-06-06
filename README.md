@@ -6,9 +6,11 @@ mà không phải đăng nhập lại.
 
 **Tính năng:**
 - Gộp hộp thư nhiều tài khoản (unified inbox)
+- Quản lý account: xem nguồn Graph/IMAP, scope, thời gian cập nhật token, đổi token, xóa account
 - Xem đầy đủ nội dung từng mail (HTML render trong iframe sandbox an toàn)
 - Tìm kiếm mail theo từ khóa trên tất cả tài khoản cùng lúc
 - Đánh dấu đã đọc / chưa đọc, lọc riêng mail chưa đọc
+- Import refresh token hàng loạt kèm log lỗi theo từng dòng
 
 > 🔐 **An toàn & hợp lệ:** Dùng OAuth 2.0 chuẩn của Microsoft (Microsoft Graph).
 > **Không lưu mật khẩu.** Mỗi tài khoản vẫn phải qua màn đăng nhập Microsoft thật
@@ -99,6 +101,7 @@ Token mã hóa lưu tại `storage/`. Xóa thư mục này nếu muốn đăng x
 | GET | `/api/outlook/login/status/{job_id}` | Poll trạng thái đăng nhập |
 | GET | `/api/outlook/accounts` | Danh sách tài khoản |
 | POST | `/api/outlook/accounts/import-refresh-token` | Import một hoặc nhiều dòng refresh token |
+| POST | `/api/outlook/accounts/{id}/refresh-token` | Đổi refresh token cho tài khoản import |
 | DELETE | `/api/outlook/accounts/{id}` | Xóa tài khoản khỏi cache |
 | GET | `/api/outlook/inbox` | Hộp thư gộp (tham số `unread_only`) |
 | GET | `/api/outlook/inbox/{id}` | Hộp thư của 1 tài khoản |
