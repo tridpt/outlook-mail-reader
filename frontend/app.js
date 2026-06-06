@@ -42,6 +42,13 @@ const state = {
   hasMore: {},      // accId -> bool
   accounts: [],
   tokenUpdateAccountId: null,
+  importJob: {
+    id: null,
+    status: "",
+    offset: 0,
+    limit: 50,
+    poll: null,
+  },
 };
 
 function filterParams() {
@@ -155,28 +162,141 @@ async function importRefreshToken() {
     return;
   }
   button.disabled = true;
-  status.textContent = `Đang kiểm tra ${lines.length} token…`;
+  stopImportPolling();
+  state.importJob.id = null;
+  state.importJob.status = "";
+  state.importJob.offset = 0;
+  renderImportLog([]);
+  renderImportPager(null);
+  renderImportProgress(null);
+  status.textContent = `Đang tạo job import ${lines.length} token…`;
   try {
-    const data = await api("/accounts/import-refresh-token", {
+    const job = await api("/accounts/import-refresh-token/job", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ line: lines.join("\n") }),
     });
-    const added = data.added ?? (data.account ? 1 : 0);
-    const failed = data.failed ?? 0;
-    if (!failed) input.value = "";
-    const failedItems = (data.results || []).filter((item) => !item.ok);
-    const firstError = failedItems[0]
-      ? ` Lỗi dòng ${failedItems[0].line}: ${failedItems[0].error}`
-      : "";
-    status.textContent = `Đã thêm ${added}/${lines.length} tài khoản. Lỗi: ${failed}.${firstError}`;
-    renderImportLog(data.results || []);
-    await loadStatus();
+    state.importJob.id = job.job_id;
+    state.importJob.status = job.status;
+    el("btn-cancel-import").style.display = "inline-block";
+    renderImportJob(job);
+    state.importJob.poll = setInterval(() => pollImportJob(), 1500);
+    pollImportJob();
   } catch (e) {
     status.textContent = "Lỗi: " + e.message;
     renderImportLog([]);
-  } finally {
+    renderImportPager(null);
+    renderImportProgress(null);
     button.disabled = false;
+    el("btn-cancel-import").style.display = "none";
+  }
+}
+
+function stopImportPolling() {
+  if (state.importJob.poll) {
+    clearInterval(state.importJob.poll);
+    state.importJob.poll = null;
+  }
+}
+
+async function pollImportJob() {
+  if (!state.importJob.id) return;
+  try {
+    const p = new URLSearchParams();
+    p.set("offset", state.importJob.offset);
+    p.set("limit", state.importJob.limit);
+    const job = await api(`/accounts/import-jobs/${state.importJob.id}?${p.toString()}`);
+    renderImportJob(job);
+    if (["done", "cancelled"].includes(job.status)) {
+      stopImportPolling();
+      el("btn-import-token").disabled = false;
+      el("btn-cancel-import").style.display = "none";
+      if (job.failed === 0 && job.status === "done") el("token-line").value = "";
+      await loadStatus();
+    }
+  } catch (e) {
+    stopImportPolling();
+    el("token-import-status").textContent = "Lỗi job import: " + e.message;
+    el("btn-import-token").disabled = false;
+    el("btn-cancel-import").style.display = "none";
+  }
+}
+
+function renderImportJob(job) {
+  state.importJob.status = job.status;
+  state.importJob.offset = job.offset || 0;
+  const active = ["queued", "running", "cancelling"].includes(job.status);
+  const doneText = job.status === "done"
+    ? "Hoàn tất"
+    : job.status === "cancelled"
+      ? "Đã hủy"
+      : job.status === "cancelling"
+        ? "Đang hủy"
+        : "Đang chạy";
+  el("token-import-status").textContent =
+    `${doneText}: ${job.processed}/${job.total}. Thêm: ${job.added}. Lỗi: ${job.failed}.`;
+  renderImportProgress(job);
+  renderImportLog(job.results || []);
+  renderImportPager(job);
+  el("btn-import-token").disabled = active;
+  el("btn-cancel-import").style.display = active ? "inline-block" : "none";
+}
+
+function renderImportProgress(job) {
+  const box = el("import-progress");
+  if (!job) {
+    box.style.display = "none";
+    box.innerHTML = "";
+    return;
+  }
+  const pct = job.total ? Math.round((job.processed / job.total) * 100) : 0;
+  box.style.display = "block";
+  box.innerHTML = `
+    <div class="progress-row">
+      <div class="progress-bar"><span style="width:${pct}%"></span></div>
+      <span>${pct}%</span>
+    </div>`;
+}
+
+function renderImportPager(job) {
+  const box = el("import-pager");
+  if (!job || !job.result_count) {
+    box.style.display = "none";
+    box.innerHTML = "";
+    return;
+  }
+  const start = job.offset + 1;
+  const end = Math.min(job.offset + job.limit, job.result_count);
+  const prevDisabled = job.offset <= 0 ? "disabled" : "";
+  const nextDisabled = end >= job.result_count ? "disabled" : "";
+  box.style.display = "flex";
+  box.innerHTML = `
+    <button class="btn small" id="import-prev" ${prevDisabled}>Trước</button>
+    <span class="hint">Dòng kết quả ${start}-${end} / ${job.result_count}</span>
+    <button class="btn small" id="import-next" ${nextDisabled}>Sau</button>`;
+  el("import-prev").onclick = () => {
+    state.importJob.offset = Math.max(0, state.importJob.offset - state.importJob.limit);
+    pollImportJob();
+  };
+  el("import-next").onclick = () => {
+    state.importJob.offset += state.importJob.limit;
+    pollImportJob();
+  };
+}
+
+async function cancelImportJob() {
+  if (!state.importJob.id) return;
+  el("btn-cancel-import").disabled = true;
+  el("token-import-status").textContent = "Đang gửi yêu cầu hủy…";
+  try {
+    const job = await api(`/accounts/import-jobs/${state.importJob.id}/cancel`, {
+      method: "POST",
+    });
+    renderImportJob(job);
+  } catch (e) {
+    el("token-import-status").textContent = "Không hủy được: " + e.message;
+  } finally {
+    el("btn-cancel-import").disabled = false;
   }
 }
 
@@ -522,6 +642,7 @@ function closeModal() {
 // ---------- Sự kiện ----------
 el("btn-add").onclick = startLogin;
 el("btn-import-token").onclick = importRefreshToken;
+el("btn-cancel-import").onclick = cancelImportJob;
 el("btn-refresh").onclick = () => (state.searchMode ? doSearch() : loadInbox());
 el("btn-search").onclick = doSearch;
 el("btn-clear").onclick = clearSearch;

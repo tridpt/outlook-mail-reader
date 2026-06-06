@@ -49,6 +49,7 @@ h2 { font-size: 1.05rem; margin: 0 0 12px; }
 .btn:hover { border-color: var(--accent); }
 .btn:disabled { opacity: .5; cursor: default; }
 .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+.btn.danger-btn { color: #ffb0b0; border-color: #5a3038; }
 
 code {
   background: #10131c;
@@ -144,6 +145,22 @@ code {
   font-size: .82rem;
   overflow-wrap: anywhere;
 }
+.import-progress { margin-top: 10px; }
+.progress-row { display: flex; align-items: center; gap: 10px; }
+.progress-bar {
+  flex: 1;
+  height: 8px;
+  background: #10131c;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.progress-bar span {
+  display: block;
+  height: 100%;
+  background: var(--accent-2);
+  transition: width .2s ease;
+}
 .import-log { margin-top: 12px; }
 .import-log-table {
   max-height: 260px;
@@ -169,6 +186,12 @@ code {
 .import-log tr:last-child td { border-bottom: 0; }
 .import-log .ok td:nth-child(3) { color: var(--accent-2); font-weight: 700; }
 .import-log .fail td:nth-child(3) { color: #ff7a7a; font-weight: 700; }
+.import-pager {
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
 .group-head { margin: 18px 0 10px; color: var(--accent-2); font-weight: 600; }
 .small { font-size: .8rem; }
 .danger { color: #ff7a7a; cursor: pointer; background: none; border: none; }

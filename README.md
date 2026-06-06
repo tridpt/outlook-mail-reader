@@ -11,6 +11,7 @@ mà không phải đăng nhập lại.
 - Tìm kiếm mail theo từ khóa trên tất cả tài khoản cùng lúc
 - Đánh dấu đã đọc / chưa đọc, lọc riêng mail chưa đọc
 - Import refresh token hàng loạt kèm log lỗi theo từng dòng
+- Import queue cho danh sách lớn: progress, phân trang log, hủy job
 
 > 🔐 **An toàn & hợp lệ:** Dùng OAuth 2.0 chuẩn của Microsoft (Microsoft Graph).
 > **Không lưu mật khẩu.** Mỗi tài khoản vẫn phải qua màn đăng nhập Microsoft thật
@@ -101,6 +102,9 @@ Token mã hóa lưu tại `storage/`. Xóa thư mục này nếu muốn đăng x
 | GET | `/api/outlook/login/status/{job_id}` | Poll trạng thái đăng nhập |
 | GET | `/api/outlook/accounts` | Danh sách tài khoản |
 | POST | `/api/outlook/accounts/import-refresh-token` | Import một hoặc nhiều dòng refresh token |
+| POST | `/api/outlook/accounts/import-refresh-token/job` | Tạo import job chạy nền |
+| GET | `/api/outlook/accounts/import-jobs/{job_id}` | Poll progress + log phân trang (`offset`, `limit`) |
+| POST | `/api/outlook/accounts/import-jobs/{job_id}/cancel` | Hủy import job |
 | POST | `/api/outlook/accounts/{id}/refresh-token` | Đổi refresh token cho tài khoản import |
 | DELETE | `/api/outlook/accounts/{id}` | Xóa tài khoản khỏi cache |
 | GET | `/api/outlook/inbox` | Hộp thư gộp (tham số `unread_only`) |

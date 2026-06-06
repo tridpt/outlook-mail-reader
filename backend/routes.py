@@ -18,10 +18,6 @@ class UpdateRefreshTokenRequest(BaseModel):
     refresh_token: str
 
 
-def _line_email(line: str) -> str:
-    return line.split("|", 1)[0].strip()
-
-
 # Map tên thư mục thân thiện -> well-known folder của Graph
 FOLDER_MAP = {
     "inbox": "inbox",
@@ -80,34 +76,40 @@ def import_refresh_token(payload: ImportRefreshTokenRequest) -> dict:
             detail="Thiếu dòng import email|password|refresh_token|client_id.",
         )
 
-    results = []
-    for idx, line in enumerate(lines, start=1):
-        email = _line_email(line)
-        try:
-            account = engine.import_refresh_token_account(line)
-            results.append(
-                {
-                    "line": idx,
-                    "email": account.get("username") or email,
-                    "ok": True,
-                    "source": account.get("source", ""),
-                    "scope": account.get("scope", ""),
-                    "account": account,
-                }
-            )
-        except RuntimeError as exc:
-            results.append({"line": idx, "email": email, "ok": False, "error": str(exc)})
+    return engine.import_refresh_token_lines(lines)
 
-    added = sum(1 for item in results if item["ok"])
-    failed = len(results) - added
 
-    return {
-        "ok": failed == 0,
-        "added": added,
-        "failed": failed,
-        "results": results,
-        "account": results[0].get("account") if len(results) == 1 and added else None,
-    }
+@router.post("/accounts/import-refresh-token/job")
+def start_import_refresh_token_job(payload: ImportRefreshTokenRequest) -> dict:
+    from engine import engine
+
+    lines = [line.strip() for line in payload.line.splitlines() if line.strip()]
+    if not lines:
+        raise HTTPException(
+            status_code=400,
+            detail="Thiếu dòng import email|password|refresh_token|client_id.",
+        )
+    return engine.begin_import_refresh_token_job(lines)
+
+
+@router.get("/accounts/import-jobs/{job_id}")
+def import_job_status(job_id: str, offset: int = 0, limit: int = 50) -> dict:
+    from engine import engine
+
+    try:
+        return engine.import_job_status(job_id, offset=offset, limit=limit)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/accounts/import-jobs/{job_id}/cancel")
+def cancel_import_job(job_id: str) -> dict:
+    from engine import engine
+
+    try:
+        return engine.cancel_import_job(job_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 @router.post("/accounts/{home_account_id}/refresh-token")

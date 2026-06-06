@@ -52,6 +52,7 @@ class OutlookEngine:
         self._lock = threading.Lock()
         # Các phiên đăng nhập device-code đang chờ người dùng nhập code
         self._login_jobs: dict[str, dict[str, Any]] = {}
+        self._import_jobs: dict[str, dict[str, Any]] = {}
 
     # ---------- App ----------
     def _build_app(self) -> msal.PublicClientApplication:
@@ -125,6 +126,30 @@ class OutlookEngine:
             "refresh_token": refresh_token,
             "client_id": client_id,
         }
+
+    @staticmethod
+    def _line_email(line: str) -> str:
+        return line.split("|", 1)[0].strip()
+
+    def _import_line_result(self, idx: int, line: str) -> dict[str, Any]:
+        email_address = self._line_email(line)
+        try:
+            account = self.import_refresh_token_account(line)
+            return {
+                "line": idx,
+                "email": account.get("username") or email_address,
+                "ok": True,
+                "source": account.get("source", ""),
+                "scope": account.get("scope", ""),
+                "account": account,
+            }
+        except RuntimeError as exc:
+            return {
+                "line": idx,
+                "email": email_address,
+                "ok": False,
+                "error": str(exc),
+            }
 
     @staticmethod
     def _token_error(data: dict[str, Any]) -> str:
@@ -296,6 +321,112 @@ class OutlookEngine:
             f"{account.get('client_id', '')}"
         )
         return self.import_refresh_token_account(line)
+
+    def import_refresh_token_lines(self, lines: list[str]) -> dict[str, Any]:
+        results = [self._import_line_result(idx, line) for idx, line in enumerate(lines, 1)]
+        added = sum(1 for item in results if item["ok"])
+        failed = len(results) - added
+        return {
+            "ok": failed == 0,
+            "added": added,
+            "failed": failed,
+            "results": results,
+            "account": results[0].get("account") if len(results) == 1 and added else None,
+        }
+
+    def begin_import_refresh_token_job(self, lines: list[str]) -> dict[str, Any]:
+        job_id = uuid.uuid4().hex
+        now = self._now_iso()
+        job: dict[str, Any] = {
+            "job_id": job_id,
+            "status": "queued",
+            "created_at": now,
+            "updated_at": now,
+            "finished_at": "",
+            "total": len(lines),
+            "processed": 0,
+            "added": 0,
+            "failed": 0,
+            "current_line": None,
+            "cancel_requested": False,
+            "results": [],
+        }
+        with self._lock:
+            self._import_jobs[job_id] = job
+
+        def _worker() -> None:
+            with self._lock:
+                job["status"] = "running"
+                job["updated_at"] = self._now_iso()
+            for idx, line in enumerate(lines, 1):
+                with self._lock:
+                    if job["cancel_requested"]:
+                        job["status"] = "cancelled"
+                        job["current_line"] = None
+                        job["finished_at"] = self._now_iso()
+                        job["updated_at"] = job["finished_at"]
+                        break
+                    job["current_line"] = idx
+                    job["updated_at"] = self._now_iso()
+                result = self._import_line_result(idx, line)
+                with self._lock:
+                    job["results"].append(result)
+                    job["processed"] += 1
+                    if result["ok"]:
+                        job["added"] += 1
+                    else:
+                        job["failed"] += 1
+                    job["updated_at"] = self._now_iso()
+            else:
+                with self._lock:
+                    job["status"] = "done"
+                    job["current_line"] = None
+                    job["finished_at"] = self._now_iso()
+                    job["updated_at"] = job["finished_at"]
+
+        threading.Thread(target=_worker, daemon=True).start()
+        return self.import_job_status(job_id)
+
+    def import_job_status(
+        self, job_id: str, offset: int = 0, limit: int = 50
+    ) -> dict[str, Any]:
+        with self._lock:
+            job = self._import_jobs.get(job_id)
+            if not job:
+                raise RuntimeError("Không tìm thấy import job.")
+            safe_offset = max(offset, 0)
+            safe_limit = min(max(limit, 1), 200)
+            results = list(job["results"])
+            total_results = len(results)
+            page = results[safe_offset : safe_offset + safe_limit]
+            return {
+                "job_id": job["job_id"],
+                "status": job["status"],
+                "created_at": job["created_at"],
+                "updated_at": job["updated_at"],
+                "finished_at": job["finished_at"],
+                "total": job["total"],
+                "processed": job["processed"],
+                "added": job["added"],
+                "failed": job["failed"],
+                "current_line": job["current_line"],
+                "cancel_requested": job["cancel_requested"],
+                "result_count": total_results,
+                "offset": safe_offset,
+                "limit": safe_limit,
+                "results": page,
+            }
+
+    def cancel_import_job(self, job_id: str) -> dict[str, Any]:
+        with self._lock:
+            job = self._import_jobs.get(job_id)
+            if not job:
+                raise RuntimeError("Không tìm thấy import job.")
+            if job["status"] in {"queued", "running"}:
+                job["cancel_requested"] = True
+                job["status"] = "cancelling"
+                job["updated_at"] = self._now_iso()
+        return self.import_job_status(job_id)
 
     # ---------- Đăng nhập (device code flow) ----------
     def begin_login(self) -> dict[str, Any]:

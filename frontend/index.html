@@ -36,9 +36,12 @@
           placeholder="email|password|refresh_token|client_id"></textarea>
         <div class="row" style="gap:8px; margin-top:8px; flex-wrap:wrap;">
           <button class="btn small" id="btn-import-token">Nhập token</button>
+          <button class="btn small danger-btn" id="btn-cancel-import" style="display:none;">Hủy import</button>
           <span class="hint" id="token-import-status">Có thể nhập nhiều dòng. Password sẽ bị bỏ qua, không lưu.</span>
         </div>
+        <div id="import-progress" class="import-progress" style="display:none;"></div>
         <div id="import-log" class="import-log" style="display:none;"></div>
+        <div id="import-pager" class="import-pager" style="display:none;"></div>
       </details>
     </div>
 
