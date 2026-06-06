@@ -4,10 +4,17 @@ Web app gộp mail của **nhiều tài khoản Outlook / Microsoft 365** vào m
 Mỗi tài khoản chỉ cần **đăng nhập 1 lần**, sau đó app tự lấy mail các lần sau
 mà không phải đăng nhập lại.
 
+**Tính năng:**
+- Gộp hộp thư nhiều tài khoản (unified inbox)
+- Xem đầy đủ nội dung từng mail (HTML render trong iframe sandbox an toàn)
+- Tìm kiếm mail theo từ khóa trên tất cả tài khoản cùng lúc
+- Đánh dấu đã đọc / chưa đọc, lọc riêng mail chưa đọc
+
 > 🔐 **An toàn & hợp lệ:** Dùng OAuth 2.0 chuẩn của Microsoft (Microsoft Graph).
 > **Không lưu mật khẩu.** Mỗi tài khoản vẫn phải qua màn đăng nhập Microsoft thật
 > đúng 1 lần — nên chỉ dùng được với tài khoản bạn sở hữu hoặc có quyền truy cập.
-> Quyền yêu cầu là `Mail.Read` (chỉ đọc). Token được lưu **mã hóa** dưới đĩa.
+> Quyền yêu cầu là `Mail.ReadWrite` (đọc mail + đánh dấu đã đọc, không gửi/xóa).
+> Token được lưu **mã hóa** dưới đĩa.
 
 ## Cấu trúc
 
@@ -66,6 +73,9 @@ Mở trình duyệt: <http://localhost:8809>
 1. Bấm **+ Thêm tài khoản** → mở link, nhập mã hiển thị, đăng nhập Microsoft
 2. Lặp lại cho từng tài khoản (mỗi cái chỉ 1 lần)
 3. Bấm **🔄 Tải mail** để xem hộp thư gộp của tất cả tài khoản
+4. Bấm vào một mail để xem nội dung đầy đủ; trong cửa sổ chi tiết có nút
+   đánh dấu đã đọc / chưa đọc
+5. Dùng ô tìm kiếm để tìm mail trên mọi tài khoản; tích "Chỉ chưa đọc" để lọc
 
 Token mã hóa lưu tại `storage/`. Xóa thư mục này nếu muốn đăng xuất hết tài khoản.
 
@@ -78,12 +88,15 @@ Token mã hóa lưu tại `storage/`. Xóa thư mục này nếu muốn đăng x
 | GET | `/api/outlook/login/status/{job_id}` | Poll trạng thái đăng nhập |
 | GET | `/api/outlook/accounts` | Danh sách tài khoản |
 | DELETE | `/api/outlook/accounts/{id}` | Xóa tài khoản khỏi cache |
-| GET | `/api/outlook/inbox` | Hộp thư gộp tất cả tài khoản |
+| GET | `/api/outlook/inbox` | Hộp thư gộp (tham số `unread_only`) |
 | GET | `/api/outlook/inbox/{id}` | Hộp thư của 1 tài khoản |
+| GET | `/api/outlook/search?q=` | Tìm mail trên tất cả tài khoản |
+| GET | `/api/outlook/message/{id}/{msg}` | Nội dung đầy đủ 1 mail |
+| POST | `/api/outlook/message/{id}/{msg}/read` | Đánh dấu đã đọc / chưa đọc |
 
 ## Hướng phát triển tiếp
 
-- Xem nội dung đầy đủ của từng mail (hiện chỉ có preview)
-- Đánh dấu đã đọc / lưu trữ
-- Tìm kiếm mail trên nhiều tài khoản cùng lúc
+- Đọc mail to bằng giọng AI (text-to-speech)
+- Lưu trữ / xóa mail
 - Thông báo khi có mail mới
+- Soạn & gửi mail
