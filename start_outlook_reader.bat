@@ -4,6 +4,9 @@ setlocal
 set "APP_DIR=%~dp0"
 set "HOST=0.0.0.0"
 set "PORT=8809"
+set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
+set "PIP_DISABLE_PIP_VERSION_CHECK=1"
 
 rem Public Azure app client id used by the existing local token cache.
 if not defined OUTLOOK_CLIENT_ID set "OUTLOOK_CLIENT_ID=cbf20cb1-8560-4ca3-995b-310d68f2bd1b"
@@ -25,7 +28,7 @@ if not exist ".venv\Scripts\python.exe" (
 call ".venv\Scripts\activate.bat"
 
 echo Installing requirements...
-python -m pip install -r requirements.txt
+python -X utf8 -m pip install -r requirements.txt
 if errorlevel 1 (
   echo Failed to install requirements.
   pause
