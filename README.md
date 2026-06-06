@@ -13,6 +13,7 @@ mà không phải đăng nhập lại.
 - Import refresh token hàng loạt kèm log lỗi theo từng dòng
 - Import queue cho danh sách lớn: chọn 1-5 luồng xử lý, progress, phân trang log, hủy job
 - Copy hoặc retry riêng các dòng import lỗi
+- Check email theo địa chỉ: kiểm tra format + DNS/MX + provider, không xác minh mailbox cụ thể
 
 > 🔐 **An toàn & hợp lệ:** Dùng OAuth 2.0 chuẩn của Microsoft (Microsoft Graph).
 > **Không lưu mật khẩu.** Mỗi tài khoản vẫn phải qua màn đăng nhập Microsoft thật
@@ -104,6 +105,7 @@ Token mã hóa lưu tại `storage/`. Xóa thư mục này nếu muốn đăng x
 | POST | `/api/outlook/login/start` | Bắt đầu đăng nhập (trả về code + link) |
 | GET | `/api/outlook/login/status/{job_id}` | Poll trạng thái đăng nhập |
 | GET | `/api/outlook/accounts` | Danh sách tài khoản |
+| POST | `/api/outlook/check-emails` | Check nhiều email theo format + DNS/MX |
 | POST | `/api/outlook/accounts/import-refresh-token` | Import một hoặc nhiều dòng refresh token |
 | POST | `/api/outlook/accounts/import-refresh-token/job` | Tạo import job chạy nền (`concurrency` 1-5) |
 | GET | `/api/outlook/accounts/import-jobs/{job_id}` | Poll progress + log phân trang (`offset`, `limit`) |

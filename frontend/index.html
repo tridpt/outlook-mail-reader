@@ -52,6 +52,17 @@
 
     <div class="card">
       <div class="row between" style="flex-wrap:wrap; gap:10px;">
+        <h2 style="margin:0;">Check mail live</h2>
+        <button class="btn small" id="btn-check-emails">Kiểm tra</button>
+      </div>
+      <textarea id="check-emails-input" class="check-emails-input" rows="4" spellcheck="false"
+        placeholder="email1@hotmail.com&#10;email2@outlook.com"></textarea>
+      <p class="hint" id="check-emails-status">Chỉ kiểm tra format + DNS/MX domain; không xác minh chắc chắn mailbox cụ thể.</p>
+      <div id="check-emails-results" class="check-results" style="display:none;"></div>
+    </div>
+
+    <div class="card">
+      <div class="row between" style="flex-wrap:wrap; gap:10px;">
         <h2 style="margin:0;">Hộp thư</h2>
         <div class="row" style="gap:8px;">
           <button class="btn small" id="btn-filters">⚙ Bộ lọc</button>

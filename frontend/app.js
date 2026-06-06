@@ -320,6 +320,78 @@ function retryFailedLines() {
   startImportLines(failed);
 }
 
+async function checkEmailsLive() {
+  const input = el("check-emails-input");
+  const status = el("check-emails-status");
+  const button = el("btn-check-emails");
+  const lines = input.value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+  if (!lines.length) {
+    status.textContent = "Chưa có email để kiểm tra.";
+    renderEmailCheckResults([]);
+    return;
+  }
+  button.disabled = true;
+  status.textContent = `Đang kiểm tra ${lines.length} email…`;
+  try {
+    const data = await api("/check-emails", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ emails: lines.join("\n") }),
+    });
+    status.textContent = `Kết quả: ${data.ok}/${data.total} domain có khả năng nhận mail.`;
+    renderEmailCheckResults(data.results || []);
+  } catch (e) {
+    status.textContent = "Lỗi: " + e.message;
+    renderEmailCheckResults([]);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderEmailCheckResults(results) {
+  const box = el("check-emails-results");
+  if (!results || !results.length) {
+    box.style.display = "none";
+    box.innerHTML = "";
+    return;
+  }
+  box.style.display = "block";
+  box.innerHTML = `
+    <div class="check-table-wrap">
+      <table class="check-table">
+        <thead>
+          <tr>
+            <th>Dòng</th>
+            <th>Email</th>
+            <th>Trạng thái</th>
+            <th>Provider</th>
+            <th>MX</th>
+            <th>Ghi chú</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${results.map((item) => `
+            <tr class="${item.ok ? "ok" : "fail"}">
+              <td>${item.line}</td>
+              <td>${escapeHtml(item.email || "")}</td>
+              <td>${emailCheckStatusText(item)}</td>
+              <td>${escapeHtml(item.provider || "unknown")}</td>
+              <td>${escapeHtml((item.mx || []).slice(0, 3).join(", "))}</td>
+              <td>${escapeHtml(item.note || "")}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function emailCheckStatusText(item) {
+  if (item.status === "domain_can_receive") return "Có thể nhận";
+  if (item.status === "syntax_error") return "Sai format";
+  if (item.status === "nxdomain") return "Domain không tồn tại";
+  if (item.status === "no_mx") return "Không có MX";
+  return "Không rõ";
+}
+
 function renderImportProgress(job) {
   const box = el("import-progress");
   if (!job) {
@@ -723,6 +795,7 @@ el("btn-import-token").onclick = importRefreshToken;
 el("btn-cancel-import").onclick = cancelImportJob;
 el("btn-copy-failed").onclick = copyFailedLines;
 el("btn-retry-failed").onclick = retryFailedLines;
+el("btn-check-emails").onclick = checkEmailsLive;
 el("btn-refresh").onclick = () => (state.searchMode ? doSearch() : loadInbox());
 el("btn-search").onclick = doSearch;
 el("btn-clear").onclick = clearSearch;

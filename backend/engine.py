@@ -132,6 +132,114 @@ class OutlookEngine:
     def _line_email(line: str) -> str:
         return line.split("|", 1)[0].strip()
 
+    @staticmethod
+    def _valid_email_address(address: str) -> bool:
+        return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", address))
+
+    @staticmethod
+    def _infer_email_provider(domain: str, mx_hosts: list[str]) -> str:
+        text = " ".join([domain.lower(), *mx_hosts])
+        if any(key in text for key in ("outlook.com", "hotmail", "protection.outlook.com")):
+            return "microsoft"
+        if any(key in text for key in ("google.com", "googlemail.com", "gmail-smtp")):
+            return "google"
+        if "yahoodns.net" in text or "yahoo" in text:
+            return "yahoo"
+        if "zoho" in text:
+            return "zoho"
+        if "yandex" in text:
+            return "yandex"
+        return "unknown"
+
+    @staticmethod
+    def _resolve_mx(domain: str) -> tuple[list[str], str]:
+        try:
+            ascii_domain = domain.encode("idna").decode("ascii")
+        except UnicodeError:
+            return [], "domain_idn_error"
+        try:
+            resp = requests.get(
+                "https://cloudflare-dns.com/dns-query",
+                params={"name": ascii_domain, "type": "MX"},
+                headers={"Accept": "application/dns-json"},
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                return [], f"dns_http_{resp.status_code}"
+            data = resp.json()
+            hosts: list[str] = []
+            for answer in data.get("Answer", []) or []:
+                if answer.get("type") != 15:
+                    continue
+                raw = str(answer.get("data", "")).strip()
+                parts = raw.split()
+                host = parts[-1] if parts else raw
+                host = host.rstrip(".").lower()
+                if host:
+                    hosts.append(host)
+            if hosts:
+                return sorted(set(hosts)), ""
+            if data.get("Status") == 3:
+                return [], "nxdomain"
+            return [], "no_mx"
+        except Exception as exc:  # noqa: BLE001
+            return [], f"dns_error: {str(exc)[:120]}"
+
+    def check_email_addresses(self, addresses: list[str]) -> dict[str, Any]:
+        results = []
+        mx_cache: dict[str, tuple[list[str], str]] = {}
+        for idx, raw in enumerate(addresses, 1):
+            address = raw.strip()
+            item: dict[str, Any] = {
+                "line": idx,
+                "email": address,
+                "ok": False,
+                "status": "syntax_error",
+                "provider": "",
+                "domain": "",
+                "mx": [],
+                "can_receive_domain": False,
+                "mailbox_verified": False,
+                "note": "Sai định dạng email.",
+            }
+            if not self._valid_email_address(address):
+                results.append(item)
+                continue
+            domain = address.rsplit("@", 1)[1].lower()
+            if domain not in mx_cache:
+                mx_cache[domain] = self._resolve_mx(domain)
+            mx_hosts, dns_error = mx_cache[domain]
+            provider = self._infer_email_provider(domain, mx_hosts)
+            item.update(
+                domain=domain,
+                provider=provider,
+                mx=mx_hosts,
+                can_receive_domain=bool(mx_hosts),
+                mailbox_verified=False,
+            )
+            if mx_hosts:
+                item.update(
+                    ok=True,
+                    status="domain_can_receive",
+                    note=(
+                        "Domain có MX, có khả năng nhận mail. "
+                        "Không xác minh mailbox cụ thể khi chỉ có địa chỉ email."
+                    ),
+                )
+            else:
+                item.update(
+                    ok=False,
+                    status=dns_error or "no_mx",
+                    note="Không tìm thấy MX cho domain hoặc DNS lỗi.",
+                )
+            results.append(item)
+        return {
+            "total": len(results),
+            "ok": sum(1 for item in results if item["ok"]),
+            "failed": sum(1 for item in results if not item["ok"]),
+            "results": results,
+        }
+
     def _import_line_result(self, idx: int, line: str) -> dict[str, Any]:
         email_address = self._line_email(line)
         try:

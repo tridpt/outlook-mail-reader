@@ -19,6 +19,10 @@ class UpdateRefreshTokenRequest(BaseModel):
     refresh_token: str
 
 
+class CheckEmailsRequest(BaseModel):
+    emails: str
+
+
 # Map tên thư mục thân thiện -> well-known folder của Graph
 FOLDER_MAP = {
     "inbox": "inbox",
@@ -64,6 +68,16 @@ def accounts() -> dict:
     from engine import engine
 
     return {"accounts": engine.list_accounts()}
+
+
+@router.post("/check-emails")
+def check_emails(payload: CheckEmailsRequest) -> dict:
+    from engine import engine
+
+    addresses = [line.strip() for line in payload.emails.splitlines() if line.strip()]
+    if not addresses:
+        raise HTTPException(status_code=400, detail="Thiếu địa chỉ email để kiểm tra.")
+    return engine.check_email_addresses(addresses)
 
 
 @router.post("/accounts/import-refresh-token")

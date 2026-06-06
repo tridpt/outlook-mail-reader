@@ -204,6 +204,45 @@ code {
   margin-top: 10px;
   flex-wrap: wrap;
 }
+.check-emails-input {
+  width: 100%;
+  min-height: 96px;
+  margin-top: 12px;
+  resize: vertical;
+  padding: 10px 12px;
+  background: #10131c;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: .86rem;
+  overflow-wrap: anywhere;
+}
+.check-results { margin-top: 12px; }
+.check-table-wrap {
+  max-height: 280px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.check-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  background: #10131c;
+}
+.check-table th,
+.check-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+  font-size: .78rem;
+}
+.check-table th { color: var(--muted); font-weight: 600; }
+.check-table tr:last-child td { border-bottom: 0; }
+.check-table .ok td:nth-child(3) { color: var(--accent-2); font-weight: 700; }
+.check-table .fail td:nth-child(3) { color: #ff7a7a; font-weight: 700; }
 .group-head { margin: 18px 0 10px; color: var(--accent-2); font-weight: 600; }
 .small { font-size: .8rem; }
 .danger { color: #ff7a7a; cursor: pointer; background: none; border: none; }
